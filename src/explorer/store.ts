@@ -27,8 +27,12 @@ type ExplorerState = {
   autoGlide: boolean;
   folderName: string;
   source: "empty" | "demo" | "folder";
+  runtime: "web" | "local";
+  localFolder: string;
+  libraryEpoch: number;
   writable: boolean;
   busy: string;
+  pendingDates: boolean;
   toast: string;
   selectedId: string | null;
   aimId: string | null;
@@ -54,6 +58,7 @@ type ExplorerState = {
   mergeSaved: (saved: Saved) => void;
   toastMessage: (message: string) => void;
   replaceLibrary: (photos: Photo[], folderName: string, source: "demo" | "folder", writable: boolean) => void;
+  applyTaken: (epoch: number, updates: Record<string, number>) => void;
 };
 
 function withMark(marks: Record<string, Mark>, id: string, edit: (mark: Mark) => Mark): Record<string, Mark> {
@@ -86,8 +91,12 @@ export const useExplorer = create<ExplorerState>((set, get) => ({
   autoGlide: false,
   folderName: "Demo library",
   source: "demo",
+  runtime: "web",
+  localFolder: "",
+  libraryEpoch: 0,
   writable: false,
   busy: "",
+  pendingDates: false,
   toast: "",
   selectedId: null,
   aimId: null,
@@ -165,8 +174,23 @@ export const useExplorer = create<ExplorerState>((set, get) => ({
       aimId: null,
       booting: false,
       busy: "",
+      pendingDates: false,
       omitted: 0,
+      loadedTextures: 0,
+      libraryEpoch: get().libraryEpoch + 1,
     });
+  },
+  applyTaken: (epoch, updates) => {
+    const state = get();
+    if (epoch !== state.libraryEpoch) return;
+    let changed = false;
+    const photos = state.photos.map((photo) => {
+      const taken = updates[photo.id];
+      if (taken == null || taken === photo.taken) return photo;
+      changed = true;
+      return { ...photo, taken };
+    });
+    set(changed ? { photos, pendingDates: false } : { pendingDates: false });
   },
 }));
 

@@ -11,6 +11,9 @@ export type Photo = {
   name: string;
   folder: string;
   url: string;
+  thumb: string;
+  /** Set when a local starter is serving this file from disk. */
+  localRef?: string;
   bytes: number;
   mtime: number;
   taken: number;
