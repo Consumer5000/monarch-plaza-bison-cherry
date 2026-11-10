@@ -1,4 +1,6 @@
 {
   "title": "Drift Hall",
-  "card": "custom"
+  "type": "x:game",
+  "card": "custom",
+  "color": "12081C"
 }

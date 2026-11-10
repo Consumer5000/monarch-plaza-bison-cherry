@@ -3,12 +3,13 @@
 @theme {
   --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Fraunces", Georgia, serif;
-  --color-bg: #0e1114;
-  --color-surface: #171c21;
-  --color-fg: #efe8dc;
-  --color-muted: #9a9286;
-  --color-brass: #d4a574;
-  --color-line: #2c353d;
+  --color-bg: #12081c;
+  --color-surface: #1d1430;
+  --color-fg: #f6f1ea;
+  --color-muted: #b7adc4;
+  --color-brass: #e4c6ff;
+  --color-tide: #7ef0e2;
+  --color-line: #3a2c52;
   --radius-md: 0.7rem;
 }
 
@@ -49,4 +50,17 @@
     font: inherit;
     color: inherit;
   }
+}
+
+@keyframes tide-slide {
+  from {
+    transform: translateX(-130%);
+  }
+  to {
+    transform: translateX(320%);
+  }
+}
+
+.tide-slide {
+  animation: tide-slide 1.15s ease-in-out infinite;
 }

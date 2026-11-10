@@ -49,42 +49,51 @@ async function readTaken(file: File): Promise<number | null> {
 export async function photosFromFiles(
   files: File[],
   onProgress: (message: string) => void,
-): Promise<{ photos: Photo[]; skippedHeic: number; capped: boolean }> {
+): Promise<{ photos: Photo[]; files: File[]; skippedHeic: number; capped: boolean }> {
   const skippedHeic = files.filter((file) => HEIC.test(file.name)).length;
   const images = files.filter((file) => IMAGE.test(file.name) && !file.name.startsWith("."));
   const capped = images.length > 2000;
   const queue = images.slice(0, 2000);
-  const photos: Photo[] = new Array(queue.length);
-  let cursor = 0;
-  let done = 0;
+  const photos: Photo[] = queue.map((file) => {
+    const url = URL.createObjectURL(file);
+    return {
+      id: `${file.name}|${file.size}|${file.lastModified}`,
+      name: file.name,
+      folder: folderOf(file),
+      url,
+      thumb: url,
+      bytes: file.size,
+      mtime: file.lastModified,
+      taken: file.lastModified,
+      caption: "",
+      blobUrl: true,
+    };
+  });
+  onProgress(queue.length ? `Opening ${queue.length} photos` : "No images in that folder");
+  return { photos, files: queue, skippedHeic, capped };
+}
 
+/** Camera dates fill in after the hall is already up, so a big folder does not sit on a blank wait. */
+export async function enrichTakenDates(photos: Photo[], files: File[]): Promise<Record<string, number> | null> {
+  const updates: Record<string, number> = {};
+  let cursor = 0;
+  let changed = false;
   async function worker() {
-    while (cursor < queue.length) {
+    while (cursor < photos.length) {
       const index = cursor;
       cursor += 1;
-      const file = queue[index]!;
-      const taken = (await readTaken(file)) ?? file.lastModified;
-      photos[index] = {
-        id: `${file.name}|${file.size}|${file.lastModified}`,
-        name: file.name,
-        folder: folderOf(file),
-        url: URL.createObjectURL(file),
-        bytes: file.size,
-        mtime: file.lastModified,
-        taken,
-        caption: "",
-        blobUrl: true,
-      };
-      done += 1;
-      if (done % 12 === 0 || done === queue.length) {
-        onProgress(`Reading dates ${done} of ${queue.length}`);
+      const file = files[index];
+      const photo = photos[index];
+      if (!file || !photo) continue;
+      const taken = (await readTaken(file)) ?? photo.taken;
+      if (Math.abs(taken - photo.taken) > 60_000) {
+        updates[photo.id] = taken;
+        changed = true;
       }
     }
   }
-
-  onProgress(queue.length ? `Reading dates 0 of ${queue.length}` : "No images in that folder");
-  await Promise.all(Array.from({ length: Math.min(6, Math.max(queue.length, 1)) }, () => worker()));
-  return { photos: photos.filter(Boolean), skippedHeic, capped };
+  await Promise.all(Array.from({ length: Math.min(6, Math.max(photos.length, 1)) }, () => worker()));
+  return changed ? updates : null;
 }
 
 export async function loadDemo(): Promise<Photo[]> {
@@ -96,6 +105,7 @@ export async function loadDemo(): Promise<Photo[]> {
     name: item.file,
     folder: "Demo library",
     url: `/demo/${item.file}`,
+    thumb: `/demo/${item.file}`,
     bytes: item.bytes,
     mtime: Date.parse(`${item.taken}T12:00:00`),
     taken: Date.parse(`${item.taken}T12:00:00`),

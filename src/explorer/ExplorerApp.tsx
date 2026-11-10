@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   Bookmark,
   Building2,
@@ -24,6 +24,7 @@ import {
 import { setHeld } from "./input";
 import {
   directoryPermission,
+  enrichTakenDates,
   filesFromDataTransfer,
   filesFromDirectory,
   libraryNameFromFiles,
@@ -36,6 +37,15 @@ import {
   supportsDirectoryPicker,
   writeFolderMarks,
 } from "./load";
+import {
+  fetchLocalDates,
+  fetchLocalManifest,
+  fetchLocalMarks,
+  openLocalFolder,
+  photoFromLocal,
+  probeLocal,
+  saveLocalMarks,
+} from "./local";
 import { isSaved, readSaved } from "./persist";
 import { allTags, formatBytes, formatWhen, visiblePhotos } from "./query";
 import { useExplorer } from "./store";
@@ -50,17 +60,24 @@ const MODE_ICON: Record<Mode, typeof LayoutGrid> = {
   maze: Waypoints,
 };
 
+function librarySummary(count: number, capped: boolean, skippedHeic: number) {
+  const parts = [`${count} photos`];
+  if (capped) parts.push("stopped at 2,000");
+  if (skippedHeic) parts.push(`skipped ${skippedHeic} HEIC`);
+  return parts.join(" · ");
+}
+
 async function ingestFiles(files: File[], folderName: string, writable: boolean) {
   useExplorer.getState().patch({
-    busy: "Reading dates…",
+    busy: "Opening photos…",
     booting: useExplorer.getState().photos.length === 0,
   });
   try {
-    const { photos, skippedHeic, capped } = await photosFromFiles(files, (message) => {
+    const { photos, files: used, skippedHeic, capped } = await photosFromFiles(files, (message) => {
       useExplorer.getState().patch({ busy: message });
     });
     if (!photos.length) {
-      useExplorer.getState().patch({ busy: "", booting: false });
+      useExplorer.getState().patch({ busy: "", booting: false, pendingDates: false });
       useExplorer.getState().toastMessage(
         skippedHeic
           ? "Those look like HEIC files. Export JPEG, PNG, or WebP — this browser cannot show HEIC."
@@ -69,15 +86,70 @@ async function ingestFiles(files: File[], folderName: string, writable: boolean)
       return null;
     }
     useExplorer.getState().replaceLibrary(photos, folderName, "folder", writable);
-    const parts = [`${photos.length} photos`];
-    if (capped) parts.push("stopped at 2,000");
-    if (skippedHeic) parts.push(`skipped ${skippedHeic} HEIC`);
-    return parts.join(" · ");
+    const epoch = useExplorer.getState().libraryEpoch;
+    useExplorer.getState().patch({ pendingDates: true });
+    void enrichTakenDates(photos, used)
+      .then((updates) => {
+        if (useExplorer.getState().libraryEpoch !== epoch) return;
+        if (updates) {
+          useExplorer.getState().applyTaken(epoch, updates);
+          useExplorer.getState().toastMessage("Camera dates are in, so the rooms shifted to match.");
+        } else {
+          useExplorer.getState().patch({ pendingDates: false });
+        }
+      })
+      .catch(() => {
+        if (useExplorer.getState().libraryEpoch === epoch) useExplorer.getState().patch({ pendingDates: false });
+      });
+    return librarySummary(photos.length, capped, skippedHeic);
   } catch {
-    useExplorer.getState().patch({ busy: "", booting: false });
+    useExplorer.getState().patch({ busy: "", booting: false, pendingDates: false });
     useExplorer.getState().toastMessage("Could not read those photos.");
     return null;
   }
+}
+
+async function loadLocalLibrary() {
+  useExplorer.getState().patch({
+    busy: "Reading the folder…",
+    booting: useExplorer.getState().photos.length === 0,
+  });
+  const manifest = await fetchLocalManifest();
+  const marks = await fetchLocalMarks();
+  if (marks) useExplorer.getState().mergeSaved(marks);
+  const photos = manifest.photos.map(photoFromLocal);
+  if (!photos.length) {
+    useExplorer.getState().patch({ busy: "", booting: false, pendingDates: false, localFolder: manifest.folder });
+    useExplorer.getState().toastMessage(
+      manifest.skippedHeic
+        ? "Those look like HEIC files. Export JPEG, PNG, or WebP and try again."
+        : "No JPEG, PNG, WebP, GIF, or AVIF images were found in that folder.",
+    );
+    return null;
+  }
+  useExplorer.getState().replaceLibrary(photos, manifest.name || "Folder", "folder", manifest.writable);
+  const epoch = useExplorer.getState().libraryEpoch;
+  useExplorer.getState().patch({ pendingDates: true, localFolder: manifest.folder, runtime: "local" });
+  void fetchLocalDates()
+    .then((updates) => {
+      if (useExplorer.getState().libraryEpoch !== epoch) return;
+      const current = new Map(useExplorer.getState().photos.map((photo) => [photo.id, photo.taken]));
+      const map: Record<string, number> = {};
+      let shifted = false;
+      for (const item of updates) {
+        const prev = current.get(item.id);
+        if (prev == null) continue;
+        map[item.id] = item.taken;
+        if (Math.abs(prev - item.taken) > 60_000) shifted = true;
+      }
+      useExplorer.getState().applyTaken(epoch, map);
+      if (shifted) useExplorer.getState().toastMessage("Camera dates are in, so the rooms shifted to match.");
+    })
+    .catch(() => {
+      if (useExplorer.getState().libraryEpoch === epoch) useExplorer.getState().patch({ pendingDates: false });
+    });
+  const message = librarySummary(photos.length, manifest.capped, manifest.skippedHeic);
+  return marks ? `${message} · loaded DriftHall/marks.json` : message;
 }
 
 async function loadDirectory(dir: FileSystemDirectoryHandle) {
@@ -104,6 +176,9 @@ export function ExplorerApp() {
   const [resume, setResume] = useState<FileSystemDirectoryHandle | null>(null);
   const [tagDraft, setTagDraft] = useState("");
   const [albumDraft, setAlbumDraft] = useState("");
+  const [pathDraft, setPathDraft] = useState("");
+  const pathInput = useRef<HTMLInputElement>(null);
+  const folderSeen = useRef("");
   const dragDepth = useRef(0);
 
   useEffect(() => {
@@ -127,6 +202,29 @@ export function ExplorerApp() {
       const saved = await readSaved();
       if (cancel) return;
       if (saved) useExplorer.getState().mergeSaved(saved);
+      const status = await probeLocal();
+      if (cancel) return;
+      if (status?.local) {
+        folderSeen.current = status.folder ?? "";
+        useExplorer.getState().patch({ runtime: "local", localFolder: status.folder ?? "" });
+        if (status.folder) {
+          setPathDraft(status.folder);
+          try {
+            const message = await loadLocalLibrary();
+            if (cancel) return;
+            if (message) useExplorer.getState().toastMessage(message);
+            else useExplorer.getState().patch({ booting: false, busy: "" });
+          } catch {
+            if (!cancel) {
+              useExplorer.getState().patch({ booting: false, busy: "", pendingDates: false });
+              useExplorer.getState().toastMessage("Could not read the saved folder.");
+            }
+          }
+          return;
+        }
+        if (!cancel) useExplorer.getState().patch({ booting: false, busy: "" });
+        return;
+      }
       const dir = await storedDirectory();
       if (cancel) return;
       if (dir && (await directoryPermission(dir, "read", false))) {
@@ -149,6 +247,26 @@ export function ExplorerApp() {
       cancel = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (state.runtime !== "local") return;
+    const timer = window.setInterval(() => {
+      void probeLocal().then((status) => {
+        const next = status?.folder ?? "";
+        if (!next || next === folderSeen.current) return;
+        folderSeen.current = next;
+        setPathDraft(next);
+        void loadLocalLibrary()
+          .then((message) => {
+            if (message) useExplorer.getState().toastMessage(message);
+          })
+          .catch(() => {
+            useExplorer.getState().patch({ busy: "", booting: false, pendingDates: false });
+          });
+      });
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [state.runtime]);
 
   useEffect(() => {
     const hasFiles = (event: DragEvent) => [...(event.dataTransfer?.types ?? [])].includes("Files");
@@ -197,6 +315,26 @@ export function ExplorerApp() {
   }, []);
 
   async function openFolder() {
+    if (useExplorer.getState().runtime === "local") {
+      try {
+        useExplorer.getState().patch({ busy: "Choose a folder…" });
+        const status = await openLocalFolder({ pick: true });
+        if (status.error || !status.folder) {
+          useExplorer.getState().patch({ busy: "", drawerOpen: true });
+          useExplorer.getState().toastMessage(status.error || "Choose a folder to fill the hall.");
+          window.setTimeout(() => pathInput.current?.focus(), 40);
+          return;
+        }
+        folderSeen.current = status.folder;
+        setPathDraft(status.folder);
+        const message = await loadLocalLibrary();
+        if (message) useExplorer.getState().toastMessage(message);
+      } catch (error) {
+        useExplorer.getState().patch({ busy: "", booting: false, pendingDates: false });
+        useExplorer.getState().toastMessage(error instanceof Error ? error.message : "Could not open that folder.");
+      }
+      return;
+    }
     if (!supportsDirectoryPicker()) {
       folderInput.current?.click();
       return;
@@ -281,11 +419,35 @@ export function ExplorerApp() {
   }
 
   async function saveIntoFolder() {
+    const payload = { version: 1 as const, marks: state.marks, albums: state.albums };
     try {
-      await writeFolderMarks({ version: 1, marks: state.marks, albums: state.albums });
+      if (state.runtime === "local") await saveLocalMarks(payload);
+      else await writeFolderMarks(payload);
       state.toastMessage("Wrote DriftHall/marks.json. The photos themselves were not modified.");
     } catch (error) {
       state.toastMessage(error instanceof Error ? error.message : "Could not write marks.");
+    }
+  }
+
+  async function usePastedPath(event: FormEvent) {
+    event.preventDefault();
+    const path = pathDraft.trim();
+    if (!path) return;
+    try {
+      useExplorer.getState().patch({ busy: "Opening that folder…" });
+      const status = await openLocalFolder({ path });
+      if (!status.folder) {
+        useExplorer.getState().patch({ busy: "" });
+        useExplorer.getState().toastMessage(status.error || "That folder could not be opened.");
+        return;
+      }
+      folderSeen.current = status.folder;
+      setPathDraft(status.folder);
+      const message = await loadLocalLibrary();
+      if (message) useExplorer.getState().toastMessage(message);
+    } catch (error) {
+      useExplorer.getState().patch({ busy: "", booting: false, pendingDates: false });
+      useExplorer.getState().toastMessage(error instanceof Error ? error.message : "Could not open that folder.");
     }
   }
 
@@ -299,6 +461,7 @@ export function ExplorerApp() {
 
   return (
     <main className="relative h-dvh w-full overflow-hidden bg-bg text-fg">
+      <LoadMeter />
       <canvas ref={canvasRef} className="absolute inset-0 z-0 h-full w-full" aria-label="Photo space" />
       <input
         ref={(node) => {
@@ -329,10 +492,16 @@ export function ExplorerApp() {
             <p className="truncate text-xs text-muted">
               {state.busy
                 ? state.busy
-                : state.photos.length === 0
-                  ? "Opening the demo library"
+                : state.pendingDates
+                  ? "Matching camera dates"
+                  : state.photos.length === 0
+                  ? state.runtime === "local"
+                    ? "Opening your photos"
+                    : "Opening the demo library"
                   : state.source === "demo"
-                    ? "Sample library · open a folder for your own"
+                    ? state.runtime === "local"
+                      ? "Sample library · choose a folder on this computer"
+                      : "Sample library · open a folder for your own"
                     : state.folderName || "Library"}
             </p>
           </div>
@@ -403,11 +572,11 @@ export function ExplorerApp() {
       {state.surface === "space" && !state.helpOpen ? (
         <div className="pointer-events-none absolute top-1/2 left-1/2 z-10 -translate-x-1/2 -translate-y-1/2">
           <div className="relative size-8">
-            <span className="absolute top-0 left-1/2 h-2.5 w-px -translate-x-1/2 bg-brass shadow-[0_0_8px_#d4a574]" />
-            <span className="absolute bottom-0 left-1/2 h-2.5 w-px -translate-x-1/2 bg-brass shadow-[0_0_8px_#d4a574]" />
-            <span className="absolute top-1/2 left-0 h-px w-2.5 -translate-y-1/2 bg-brass shadow-[0_0_8px_#d4a574]" />
-            <span className="absolute top-1/2 right-0 h-px w-2.5 -translate-y-1/2 bg-brass shadow-[0_0_8px_#d4a574]" />
-            <span className="absolute top-1/2 left-1/2 size-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-brass" />
+            <span className="absolute top-0 left-1/2 h-2.5 w-px -translate-x-1/2 bg-tide shadow-[0_0_8px_var(--color-tide)]" />
+            <span className="absolute bottom-0 left-1/2 h-2.5 w-px -translate-x-1/2 bg-tide shadow-[0_0_8px_var(--color-tide)]" />
+            <span className="absolute top-1/2 left-0 h-px w-2.5 -translate-y-1/2 bg-tide shadow-[0_0_8px_var(--color-tide)]" />
+            <span className="absolute top-1/2 right-0 h-px w-2.5 -translate-y-1/2 bg-tide shadow-[0_0_8px_var(--color-tide)]" />
+            <span className="absolute top-1/2 left-1/2 size-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-tide" />
           </div>
           {aimed ? (
             <p className="mt-2 max-w-56 truncate text-center text-xs text-fg/90">{aimed.caption || aimed.name}</p>
@@ -425,7 +594,7 @@ export function ExplorerApp() {
                 className="overflow-hidden rounded-md border border-line bg-surface text-left"
                 onClick={() => state.requestFocus(photo.id)}
               >
-                <img src={photo.url} alt="" className="aspect-square w-full object-cover" />
+                <img src={photo.thumb} alt="" className="aspect-square w-full object-cover" loading="lazy" decoding="async" />
                 <span className="block truncate px-2 py-1.5 text-xs text-muted">{formatWhen(photo.taken)}</span>
               </button>
             ))}
@@ -487,10 +656,11 @@ export function ExplorerApp() {
                       onClick={() => state.requestFocus(photo.id)}
                     >
                       <img
-                        src={photo.url}
+                        src={photo.thumb}
                         alt=""
                         className="h-full w-full object-cover"
                         loading={index < 8 ? "eager" : "lazy"}
+                        decoding="async"
                       />
                     </button>
                   );
@@ -525,7 +695,24 @@ export function ExplorerApp() {
               <X className="size-4" />
             </button>
           </div>
-          <p className="text-sm text-muted">{visible.length} of {state.photos.length || 0} photos</p>
+          <p className="text-sm text-muted">
+            {visible.length} of {state.photos.length || 0} photos
+            {state.runtime === "local" && state.localFolder ? ` · ${state.localFolder}` : ""}
+          </p>
+          {state.runtime === "local" ? (
+            <form className="flex gap-1.5" onSubmit={(event) => void usePastedPath(event)}>
+              <input
+                ref={pathInput}
+                className={field}
+                value={pathDraft}
+                placeholder="Paste a folder path"
+                onChange={(event) => setPathDraft(event.target.value)}
+              />
+              <button type="submit" className={btn}>
+                Use
+              </button>
+            </form>
+          ) : null}
           <label className="relative block">
             <Search className="pointer-events-none absolute top-3 left-3 size-4 text-muted" />
             <input
@@ -648,7 +835,11 @@ export function ExplorerApp() {
             </button>
             <p className="text-xs leading-relaxed text-muted">
               Marks are kept in this browser. Saving into a folder writes a sidecar, never the original files.
-              {state.writable ? "" : " Drag, drop, and the basic picker cannot write back."}
+              {state.runtime === "local"
+                ? " This copy reads pictures straight from the folder."
+                : state.writable
+                  ? ""
+                  : " Drag, drop, and the basic picker cannot write back."}
             </p>
           </div>
         </aside>
@@ -690,6 +881,32 @@ export function ExplorerApp() {
         </div>
       ) : null}
     </main>
+  );
+}
+
+function LoadMeter() {
+  const busy = useExplorer((s) => s.busy);
+  const pendingDates = useExplorer((s) => s.pendingDates);
+  const loaded = useExplorer((s) => s.loadedTextures);
+  const count = useExplorer((s) => s.photos.length);
+  const target = Math.min(12, count);
+  const warming = loaded > 0 && target > 0 && loaded < target;
+  const show = Boolean(busy) || pendingDates || warming;
+  if (!show) return null;
+  const label = busy || (pendingDates ? "Matching camera dates" : "Bringing pictures into the hall");
+  const determinate = warming && !busy;
+  const width = determinate ? Math.max(8, Math.round((loaded / target) * 100)) : 38;
+  return (
+    <div
+      className="pointer-events-none absolute inset-x-0 top-0 z-50 h-1 overflow-hidden bg-line/80"
+      role="progressbar"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={determinate ? width : undefined}
+    >
+      <div className={`h-full bg-tide ${determinate ? "" : "tide-slide"}`} style={{ width: `${width}%` }} />
+    </div>
   );
 }
 
@@ -750,7 +967,7 @@ function Inspector({
   return (
     <aside className="absolute inset-x-2 bottom-36 z-50 max-h-[48%] overflow-y-auto rounded-md border border-line bg-surface/95 p-3 backdrop-blur-md md:inset-x-auto md:top-28 md:right-3 md:bottom-36 md:w-80 md:max-h-none">
       <div className="mb-2 flex items-start gap-2">
-        <img src={photo.url} alt="" className="h-16 w-16 rounded-md object-cover" />
+        <img src={photo.thumb} alt="" className="h-16 w-16 rounded-md object-cover" />
         <div className="min-w-0 flex-1">
           <h2 className="truncate font-display text-lg">{photo.caption || photo.name}</h2>
           <p className="truncate text-xs text-muted">{photo.name}</p>
@@ -858,8 +1075,13 @@ function Help({ onClose }: { onClose: () => void }) {
         </div>
         <div className="space-y-3 text-sm leading-relaxed text-fg/90">
           <p>
-            Open a folder from your computer. Photos stay on this machine — nothing is uploaded. Dates come from the
-            camera’s EXIF when it exists, otherwise from the file date.
+            Open a folder from your computer. Photos stay where they are — nothing is uploaded. On the desktop starter,
+            the hall reads that folder straight from disk and remembers it next time. Dates come from the camera when
+            they exist, otherwise from the file date, and they fill in while you are already walking.
+          </p>
+          <p>
+            The rooms drift a little, like a dream: lilac and teal light, slow rings, a breath of fog. The pictures
+            themselves stay as they were shot.
           </p>
           <p>
             <strong className="font-medium text-brass">Date grid</strong> lines pictures up by month.{" "}

@@ -16,7 +16,7 @@ export const Route = createRootRoute({
         content:
           "Fly through a folder of photos as billboards, gallery rooms, tunnels, and mazes. Star, tag, and write marks back beside the files.",
       },
-      { name: "theme-color", content: "#0e1114" },
+      { name: "theme-color", content: "#12081c" },
     ],
     links: [
       { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },

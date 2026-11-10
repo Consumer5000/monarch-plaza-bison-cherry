@@ -49,7 +49,7 @@ import { visiblePhotos } from "./query";
 import { useExplorer } from "./store";
 import type { Block, BlockColor, Layout, Mode, Photo, PhotoNode, Vec3 } from "./types";
 
-const BLOCK_COLOR = { wall: 0x2c353e, floor: 0x161b21, ceiling: 0x242c34, path: 0x8a6840 } as const;
+const BLOCK_COLOR = { wall: 0x2a2144, floor: 0x140e22, ceiling: 0x221838, path: 0x5ee0d0 } as const;
 const RADIUS = 0.32;
 const MOVE = new Set([
   "KeyW",
@@ -106,6 +106,18 @@ function hdr(mat: MeshBasicMaterial, r: number, g: number, b: number) {
   mat.color.b = b;
 }
 
+function textureSource(photo: Photo, quality: "fast" | "sharp") {
+  if (!photo.localRef) return photo.url;
+  const width = quality === "sharp" ? 1280 : 640;
+  return `/api/local/thumb?p=${encodeURIComponent(photo.localRef)}&w=${width}&v=${Math.round(photo.mtime)}`;
+}
+
+function libraryKey(photos: Photo[], quality: string) {
+  let key = quality;
+  for (const photo of photos) key += `\n${photo.id}\0${photo.localRef ?? photo.url}`;
+  return key;
+}
+
 export function mountWorld(canvas: HTMLCanvasElement) {
   let renderer: WebGLRenderer;
   try {
@@ -119,17 +131,17 @@ export function mountWorld(canvas: HTMLCanvasElement) {
     useExplorer.getState().toastMessage("WebGL isn’t available in this browser.");
     return { dispose() {} };
   }
-  const pixelRatio = Math.min(window.devicePixelRatio || 1, 1.5);
+  const pixelRatio = Math.min(window.devicePixelRatio || 1, 1.25);
   renderer.setPixelRatio(pixelRatio);
   renderer.outputColorSpace = SRGBColorSpace;
   renderer.toneMapping = NoToneMapping;
-  renderer.setClearColor(0x0e1114, 1);
+  renderer.setClearColor(0x12081c, 1);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = PCFSoftShadowMap;
 
   const scene = new Scene();
-  scene.background = new Color(0x0e1114);
-  const fog = new FogExp2(0x0e1114, useExplorer.getState().fog);
+  scene.background = new Color(0x12081c);
+  const fog = new FogExp2(0x2a1840, useExplorer.getState().fog);
   scene.fog = fog;
   const camera = new PerspectiveCamera(68, 1, 0.08, 2500);
   scene.add(camera);
@@ -138,9 +150,9 @@ export function mountWorld(canvas: HTMLCanvasElement) {
   const timer = new Timer();
   timer.connect(document);
 
-  const hemi = new HemisphereLight(0xc9d6e6, 0x3d2c18, 1.7);
+  const hemi = new HemisphereLight(0xcbb6ff, 0x123c3c, 1.45);
   scene.add(hemi);
-  const keyLight = new DirectionalLight(0xfff4e2, 3.4);
+  const keyLight = new DirectionalLight(0x7ef0e2, 2.15);
   keyLight.position.set(7, 14, 5);
   keyLight.castShadow = true;
   keyLight.shadow.mapSize.set(1024, 1024);
@@ -155,7 +167,7 @@ export function mountWorld(canvas: HTMLCanvasElement) {
   scene.add(keyLight);
   scene.add(keyLight.target);
 
-  const flash = new SpotLight(0xffe4bc, 0, 26, 0.5, 0.58, 1);
+  const flash = new SpotLight(0xd7c6ff, 0, 26, 0.5, 0.58, 1);
   flash.position.set(0, -0.05, 0.15);
   flash.target.position.set(0, -0.15, -1);
   camera.add(flash);
@@ -169,7 +181,7 @@ export function mountWorld(canvas: HTMLCanvasElement) {
     toneMapped: false,
     fog: false,
   });
-  hdr(beamMat, 1.4, 1.05, 0.7);
+  hdr(beamMat, 0.55, 1.35, 1.45);
   const beam = new Mesh(new CylinderGeometry(0.07, 1.45, 8.5, 18, 1, true), beamMat);
   beam.rotation.x = Math.PI / 2;
   beam.position.z = -4.2;
@@ -183,16 +195,25 @@ export function mountWorld(canvas: HTMLCanvasElement) {
     dustOrigin[i * 3 + 1] = (Math.random() - 0.2) * 6.5;
     dustOrigin[i * 3 + 2] = (Math.random() - 0.5) * 24;
   }
+  const dustColors = new Float32Array(dustCount * 3);
+  for (let i = 0; i < dustCount; i++) {
+    const tide = i % 2 === 0;
+    dustColors[i * 3] = tide ? 0.45 : 0.9;
+    dustColors[i * 3 + 1] = tide ? 0.95 : 0.45;
+    dustColors[i * 3 + 2] = tide ? 0.9 : 1;
+  }
   const dustGeo = new BufferGeometry();
   dustGeo.setAttribute("position", new Float32BufferAttribute(dustCount * 3, 3));
+  dustGeo.setAttribute("color", new Float32BufferAttribute(dustColors, 3));
   const dustMat = new PointsMaterial({
-    color: 0xead8ba,
+    color: 0xffffff,
     size: 0.05,
     transparent: true,
     opacity: 0.5,
     depthWrite: false,
     blending: AdditiveBlending,
     sizeAttenuation: true,
+    vertexColors: true,
   });
   const dust = new Points(dustGeo, dustMat);
   dust.frustumCulled = false;
@@ -211,7 +232,7 @@ export function mountWorld(canvas: HTMLCanvasElement) {
   const starFieldGeo = new BufferGeometry();
   starFieldGeo.setAttribute("position", new Float32BufferAttribute(starPositions, 3));
   const starFieldMat = new PointsMaterial({
-    color: 0xf7f2e8,
+    color: 0xd9c8ff,
     size: 0.62,
     transparent: true,
     opacity: 0.9,
@@ -223,9 +244,41 @@ export function mountWorld(canvas: HTMLCanvasElement) {
   starField.frustumCulled = false;
   scene.add(starField);
 
+  const dreamAnchor = new Group();
+  scene.add(dreamAnchor);
+  const dreamPieces: { mesh: Mesh; spin: number }[] = [];
+  const dreamSpecs = [
+    { radius: 11, tube: 0.03, tilt: [0.9, 0.25, 0.4] as const, spin: 0.16, color: [0.45, 1.35, 1.25] as const },
+    { radius: 7.2, tube: 0.018, tilt: [0.25, 1.15, 0.55] as const, spin: -0.24, color: [1.35, 0.55, 1.55] as const },
+    { radius: 15.5, tube: 0.045, tilt: [1.35, 0.15, 0.7] as const, spin: 0.07, color: [0.7, 0.85, 1.7] as const },
+    { radius: 4.8, tube: 0.016, tilt: [0.55, 0.7, 1.25] as const, spin: 0.32, color: [1.15, 1.05, 1.75] as const },
+  ];
+  const dreamTrash: Array<() => void> = [];
+  for (const spec of dreamSpecs) {
+    const geo = new TorusGeometry(spec.radius, spec.tube, 10, 72);
+    const mat = new MeshBasicMaterial({
+      transparent: true,
+      opacity: 0.26,
+      depthWrite: false,
+      side: DoubleSide,
+      blending: AdditiveBlending,
+      toneMapped: false,
+    });
+    hdr(mat, spec.color[0], spec.color[1], spec.color[2]);
+    const mesh = new Mesh(geo, mat);
+    mesh.rotation.set(spec.tilt[0], spec.tilt[1], spec.tilt[2]);
+    mesh.raycast = () => undefined;
+    dreamAnchor.add(mesh);
+    dreamPieces.push({ mesh, spin: spec.spin });
+    dreamTrash.push(() => {
+      geo.dispose();
+      mat.dispose();
+    });
+  }
+
   const composer = new EffectComposer(renderer);
   composer.setPixelRatio(pixelRatio);
-  const bloomPass = new UnrealBloomPass(new Vector2(512, 512), 0.48, 0.66, 1.01);
+  const bloomPass = new UnrealBloomPass(new Vector2(384, 384), 0.42, 0.72, 0.96);
   const gradePass = new ShaderPass({
     uniforms: {
       tDiffuse: { value: null },
@@ -243,12 +296,19 @@ export function mountWorld(canvas: HTMLCanvasElement) {
       uniform float time;
       varying vec2 vUv;
       void main() {
-        vec4 color = texture2D(tDiffuse, vUv);
         vec2 p = vUv - 0.5;
-        float vignette = smoothstep(0.95, 0.22, length(p));
-        color.rgb *= mix(0.62, 1.0, vignette);
+        float edge = smoothstep(0.15, 0.85, length(p));
+        float fringe = 0.0014 * edge;
+        vec4 color;
+        color.r = texture2D(tDiffuse, vUv + vec2(fringe, 0.0)).r;
+        color.g = texture2D(tDiffuse, vUv).g;
+        color.b = texture2D(tDiffuse, vUv - vec2(fringe, fringe * 0.4)).b;
+        color.a = 1.0;
+        float vignette = smoothstep(0.98, 0.28, length(p));
+        color.rgb *= mix(0.55, 1.0, vignette);
+        color.rgb = mix(color.rgb, color.rgb * vec3(0.86, 0.95, 1.18) + vec3(0.05, 0.0, 0.06), 0.14);
         float grain = fract(sin(dot(vUv + fract(time * 0.013), vec2(12.9898, 78.233))) * 43758.5453);
-        color.rgb += (grain - 0.5) * 0.03;
+        color.rgb += (grain - 0.5) * 0.025;
         gl_FragColor = color;
       }
     `,
@@ -260,10 +320,10 @@ export function mountWorld(canvas: HTMLCanvasElement) {
 
   const photoGeo = new PlaneGeometry(1, 1);
   const frameMat = new MeshBasicMaterial({ side: DoubleSide, toneMapped: false });
-  hdr(frameMat, 1.7, 1.05, 0.58);
+  hdr(frameMat, 1.15, 0.85, 1.7);
   const starGeo = new CircleGeometry(0.08, 16);
   const starMat = new MeshBasicMaterial({ side: DoubleSide, toneMapped: false });
-  hdr(starMat, 2.8, 1.85, 0.8);
+  hdr(starMat, 1.55, 1.15, 2.3);
   const raycaster = new Raycaster();
   const pointer = new Vector2(0, 0);
   const look = new Vector3();
@@ -283,7 +343,8 @@ export function mountWorld(canvas: HTMLCanvasElement) {
   let token = 0;
   let inflight = 0;
   let texQuality = useExplorer.getState().quality;
-  let photoRef = useExplorer.getState().photos;
+  let sourceKey = "";
+  let fogBase = useExplorer.getState().fog;
   let layoutKey = "";
   let builtMode: Mode | null = null;
   let didBuild = false;
@@ -297,6 +358,7 @@ export function mountWorld(canvas: HTMLCanvasElement) {
   let bobAmp = 0;
   let shadowsOn = false;
   const pos = new Vector3(0, 1.62, 5);
+  const vel = new Vector3();
   let tween: {
     t: number;
     from: Vector3;
@@ -358,7 +420,7 @@ export function mountWorld(canvas: HTMLCanvasElement) {
     const ctx = board.getContext("2d");
     if (!ctx) return;
     ctx.font = "600 78px Fraunces, Georgia, serif";
-    ctx.fillStyle = "#f0d7b4";
+    ctx.fillStyle = "#e7d4ff";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(text, 384, 80);
@@ -431,7 +493,7 @@ export function mountWorld(canvas: HTMLCanvasElement) {
   function blockMaterial(color: BlockColor) {
     if (color === "path") {
       const mat = new MeshBasicMaterial({ toneMapped: false });
-      hdr(mat, 1.75, 1.02, 0.46);
+      hdr(mat, 0.18, 0.62, 0.55);
       return mat;
     }
     if (color === "floor") {
@@ -489,7 +551,7 @@ export function mountWorld(canvas: HTMLCanvasElement) {
     if (mode === "tunnel") {
       const geo = new TorusGeometry(5.15, 0.035, 10, 64);
       const mat = new MeshBasicMaterial({ toneMapped: false });
-      hdr(mat, 2.4, 1.35, 0.62);
+      hdr(mat, 0.7, 1.45, 1.7);
       const zs = new Set<number>();
       for (const node of layout.nodes) {
         if (node.kind === "photo") zs.add(Math.round(node.position[2] * 10) / 10);
@@ -510,7 +572,7 @@ export function mountWorld(canvas: HTMLCanvasElement) {
     if (mode === "gallery") {
       const panelGeo = new PlaneGeometry(2.6, 1.15);
       const panelMat = new MeshBasicMaterial({ toneMapped: false });
-      hdr(panelMat, 3.4, 2.35, 1.45);
+      hdr(panelMat, 1.1, 1.7, 2.4);
       const shaftGeo = new CylinderGeometry(0.28, 1.05, 3.15, 14, 1, true);
       const shaftMat = new MeshBasicMaterial({
         color: 0xffe6c0,
@@ -548,7 +610,7 @@ export function mountWorld(canvas: HTMLCanvasElement) {
       const height = Math.max(4, Math.abs(minZ) + 2);
       const geo = new CylinderGeometry(0.035, 0.035, height, 8);
       const mat = new MeshBasicMaterial({ toneMapped: false });
-      hdr(mat, 2.2, 1.25, 0.55);
+      hdr(mat, 1.2, 0.7, 1.8);
       const spine = new Mesh(geo, mat);
       spine.rotation.x = Math.PI / 2;
       spine.position.set(0, 1.62, minZ / 2);
@@ -567,7 +629,7 @@ export function mountWorld(canvas: HTMLCanvasElement) {
     keyLight.castShadow = shadowsOn;
     clearContent();
     loop = layout.loop;
-    const urls = new Map(photos.map((photo) => [photo.id, photo.url]));
+    const urls = new Map(photos.map((photo) => [photo.id, textureSource(photo, texQuality)]));
     for (const node of layout.nodes) {
       if (node.kind === "label") addLabel(node.text, node.position);
       else addPhoto(node, urls.get(node.id) ?? "", layout.loop?.span ?? null);
@@ -613,15 +675,14 @@ export function mountWorld(canvas: HTMLCanvasElement) {
   function syncScene() {
     const state = useExplorer.getState();
     const vis = visiblePhotos(state);
-    if (state.photos !== photoRef) {
-      photoRef = state.photos;
-      clearCache();
-    }
-    if (texQuality !== state.quality) {
+    const nextKey = libraryKey(state.photos, state.quality);
+    if (nextKey !== sourceKey) {
+      sourceKey = nextKey;
       texQuality = state.quality;
       clearCache();
     }
-    fog.density = state.fog * (state.mode === "maze" ? 1.35 : state.mode === "float" ? 0.72 : 1);
+    fogBase = state.fog * (state.mode === "maze" ? 1.4 : state.mode === "float" ? 0.62 : 1);
+    fog.density = fogBase;
     const sig = [
       state.mode,
       state.cols,
@@ -655,6 +716,10 @@ export function mountWorld(canvas: HTMLCanvasElement) {
         }
       }
     }
+    for (const photo of vis) {
+      const rec = records.get(photo.id);
+      if (rec) rec.url = textureSource(photo, texQuality);
+    }
     pump();
   }
 
@@ -686,10 +751,10 @@ export function mountWorld(canvas: HTMLCanvasElement) {
       if (!response.ok) throw new Error("image");
       const blob = await response.blob();
       if (generation !== token || dead) return;
-      const maxW = texQuality === "sharp" ? 1400 : 720;
+      const maxW = texQuality === "sharp" ? 1280 : 640;
       let bitmap: ImageBitmap;
       try {
-        bitmap = await createImageBitmap(blob, { resizeWidth: maxW, resizeQuality: "medium" });
+        bitmap = await createImageBitmap(blob, { resizeWidth: maxW, resizeQuality: "low" });
       } catch {
         bitmap = await createImageBitmap(blob);
       }
@@ -697,13 +762,9 @@ export function mountWorld(canvas: HTMLCanvasElement) {
         bitmap.close();
         return;
       }
-      const board = document.createElement("canvas");
-      board.width = bitmap.width;
-      board.height = bitmap.height;
-      board.getContext("2d")?.drawImage(bitmap, 0, 0);
       const aspect = bitmap.width / Math.max(1, bitmap.height);
-      bitmap.close();
-      const tex = new CanvasTexture(board);
+      const tex = new Texture(bitmap);
+      tex.needsUpdate = true;
       tex.colorSpace = SRGBColorSpace;
       tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
       cache.set(id, { tex, aspect });
@@ -740,13 +801,13 @@ export function mountWorld(canvas: HTMLCanvasElement) {
   }
 
   function pump() {
-    if (inflight >= 4) return;
+    if (inflight >= 6) return;
     const ranked = [...records.values()]
       .filter((rec) => rec.url && !cache.has(rec.id) && !pending.has(rec.id))
       .sort((a, b) => a.base.distanceToSquared(pos) - b.base.distanceToSquared(pos));
     const generation = token;
     for (const rec of ranked) {
-      if (inflight >= 4) break;
+      if (inflight >= 6) break;
       void loadOne(rec.id, rec.url, generation);
     }
   }
@@ -774,9 +835,11 @@ export function mountWorld(canvas: HTMLCanvasElement) {
     const state = useExplorer.getState();
     if (state.surface !== "space" || state.helpOpen || isTyping()) {
       speed = 0;
+      vel.set(0, 0, 0);
       return;
     }
     if (tween) {
+      vel.set(0, 0, 0);
       tween.t += dt;
       const k = clamp(tween.t / 0.7, 0, 1);
       const eased = k * k * (3 - 2 * k);
@@ -812,12 +875,18 @@ export function mountWorld(canvas: HTMLCanvasElement) {
       vx = (fx * forward + rx * strafe) * mag;
       vz = (fz * forward + rz * strafe) * mag;
     }
-    speed = Math.hypot(vx, vy, vz);
-    pos.x += vx * dt;
-    pos.y += vy * dt;
-    pos.z += vz * dt;
+    const blend = 1 - Math.exp(-dt * 7.5);
+    vel.x += (vx - vel.x) * blend;
+    vel.y += (vy - vel.y) * blend;
+    vel.z += (vz - vel.z) * blend;
+    speed = vel.length();
+    pos.x += vel.x * dt;
+    pos.y += vel.y * dt;
+    pos.z += vel.z * dt;
     if (!fly) {
       const next = resolve(pos.x, pos.z);
+      if (Math.abs(next.x - pos.x) > 1e-4) vel.x = 0;
+      if (Math.abs(next.z - pos.z) > 1e-4) vel.z = 0;
       pos.x = next.x;
       pos.z = next.z;
       pos.y += (1.62 - pos.y) * Math.min(1, dt * 8);
@@ -846,6 +915,7 @@ export function mountWorld(canvas: HTMLCanvasElement) {
       camera.position.z - Math.cos(yaw) * cp,
     );
     camera.lookAt(look);
+    camera.rotateZ(Math.sin(elapsed * 0.17) * 0.012);
     const targetFov = sprinting && speed > 1 && !tween ? 76 : 68;
     if (Math.abs(camera.fov - targetFov) > 0.04) {
       camera.fov += (targetFov - camera.fov) * Math.min(1, dt * 4.5);
@@ -857,13 +927,14 @@ export function mountWorld(canvas: HTMLCanvasElement) {
     const gallery = mode === "gallery";
     hemi.intensity = maze ? 0.22 : gallery ? 0.7 : 1.55;
     keyLight.intensity = maze ? 0.35 : gallery ? 1.5 : 3.1;
-    flash.intensity = maze ? 42 + Math.sin(elapsed * 18) * 1.4 : gallery ? 10 : mode === "grid" ? 6 : 0;
+    flash.intensity = maze ? 28 + Math.sin(elapsed * 18) * 1.2 : gallery ? 6 : mode === "grid" ? 1.4 : 0;
     flash.angle = maze ? 0.46 : 0.72;
     flash.distance = maze ? 18 : 30;
     beam.visible = maze || gallery;
     beamMat.opacity = maze ? 0.075 : 0.04;
     starField.visible = mode === "float" || mode === "tunnel" || mode === "spiral";
     starField.position.copy(pos);
+    starField.rotation.y = elapsed * 0.015;
     keyLight.position.set(pos.x + 6, pos.y + 12, pos.z + 5);
     keyLight.target.position.set(pos.x, 0.2, pos.z - 2);
     bloomPass.strength = maze ? 0.72 : mode === "tunnel" ? 0.85 : gallery ? 0.58 : mode === "float" ? 0.5 : 0.4;
@@ -891,12 +962,15 @@ export function mountWorld(canvas: HTMLCanvasElement) {
       rec.mesh.position.y += Math.sin(elapsed * 0.9 + rec.phase) * 0.12;
     }
     const glow = 0.82 + Math.sin(elapsed * 1.6) * 0.18;
+    const tide = 0.5 + Math.sin(elapsed * 0.7) * 0.5;
     for (const mesh of pulses) {
       const mat = mesh.material as MeshBasicMaterial;
-      mat.color.r = 3.2 * glow;
-      mat.color.g = 2.15 * glow;
-      mat.color.b = 1.25 * glow;
+      mat.color.r = (0.55 + 0.9 * (1 - tide)) * glow;
+      mat.color.g = (0.85 + 0.7 * tide) * glow;
+      mat.color.b = (1.15 + 0.9 * tide) * glow;
     }
+    frameMat.color.setHSL(0.74 + Math.sin(elapsed * 0.35) * 0.14, 0.62, 0.56);
+    frameMat.color.multiplyScalar(1.55);
   }
 
   function resize() {
@@ -1054,6 +1128,15 @@ export function mountWorld(canvas: HTMLCanvasElement) {
     applyCamera(dt, elapsed);
     billboard(elapsed);
     updateDust(elapsed);
+    fog.density = fogBase * (1 + Math.sin(elapsed * 0.37) * 0.1);
+    const follow = Math.min(1, dt * 0.45);
+    dreamAnchor.position.x += (pos.x - dreamAnchor.position.x) * follow;
+    dreamAnchor.position.z += (pos.z - dreamAnchor.position.z) * follow;
+    dreamAnchor.position.y = 1.35 + Math.sin(elapsed * 0.23) * 0.28;
+    for (const piece of dreamPieces) {
+      piece.mesh.rotation.y += dt * piece.spin;
+      piece.mesh.rotation.x += dt * piece.spin * 0.28;
+    }
     gradePass.uniforms.time!.value = elapsed;
     const heading = headingOf(yaw);
     if (heading !== useExplorer.getState().heading) useExplorer.getState().patch({ heading });
@@ -1064,7 +1147,7 @@ export function mountWorld(canvas: HTMLCanvasElement) {
       if (id !== useExplorer.getState().aimId) useExplorer.getState().patch({ aimId: id });
     }
     pumpWait += dt;
-    if (pumpWait > 0.35) {
+    if (pumpWait > 0.12) {
       pumpWait = 0;
       pump();
     }
@@ -1098,6 +1181,7 @@ export function mountWorld(canvas: HTMLCanvasElement) {
       dustMat.dispose();
       starFieldGeo.dispose();
       starFieldMat.dispose();
+      for (const disposeDream of dreamTrash) disposeDream();
       beam.geometry.dispose();
       beamMat.dispose();
       composer.dispose();

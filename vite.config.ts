@@ -11,6 +11,8 @@ import { grokPwaPlugin } from "./scripts/grok-pwa-plugin.mjs";
 // @ts-expect-error JS plugin alongside the TS vite config
 import { appEnvPlugin } from "./scripts/app-env-plugin.mjs";
 import { isMigrationFile } from "./scripts/migration-plan.mjs";
+// @ts-expect-error JS plugin alongside the TS vite config
+import { localFolderPlugin } from "./scripts/local-folder-plugin.mjs";
 
 /** The files `src/lib/db.ts` globs — same directory, same non-recursive scope. */
 function hasGlobbedMigrations(root: string): boolean {
@@ -142,13 +144,16 @@ function authPopupPlugin(): Plugin {
   };
 }
 
-// `0.0.0.0:8080` is the live-preview contract — don't change host/port.
+// `0.0.0.0:8080` is the live-preview contract. The desktop starter sets
+// DRIFT_LOCAL=1 and then this file binds 127.0.0.1:8787 instead.
 // The dev server starts once `src/router.tsx` and `src/routes/` exist — see
 // AGENTS.md § "First scaffold".
+const localDesktop = process.env.DRIFT_LOCAL === "1";
+
 export default defineConfig(({ command, isPreview }) => ({
   server: {
-    host: "0.0.0.0",
-    port: 8080,
+    host: localDesktop ? "127.0.0.1" : "0.0.0.0",
+    port: localDesktop ? 8787 : 8080,
     strictPort: true,
   },
   preview: {
@@ -158,6 +163,7 @@ export default defineConfig(({ command, isPreview }) => ({
   },
   resolve: { tsconfigPaths: true },
   plugins: [
+    ...(localDesktop ? [localFolderPlugin()] : []),
     pgliteBootstrapPlugin(),
     // Before tanstackStart so /auth/popup never falls through to the SPA.
     authPopupPlugin(),

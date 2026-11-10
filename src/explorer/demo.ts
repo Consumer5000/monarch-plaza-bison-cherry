@@ -8,6 +8,7 @@ export const demoPhotos: Photo[] = (manifest as DemoItem[]).map((item) => ({
   name: item.file,
   folder: "Demo library",
   url: `/demo/${item.file}`,
+  thumb: `/demo/${item.file}`,
   bytes: item.bytes,
   mtime: Date.parse(`${item.taken}T12:00:00`),
   taken: Date.parse(`${item.taken}T12:00:00`),
