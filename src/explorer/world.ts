@@ -10,6 +10,8 @@ import {
   DoubleSide,
   Float32BufferAttribute,
   FogExp2,
+  LinearFilter,
+  LinearMipmapLinearFilter,
   Group,
   HemisphereLight,
   InstancedMesh,
@@ -75,7 +77,8 @@ const MOVE = new Set([
 
 type Rec = {
   id: string;
-  url: string;
+  previewUrl: string;
+  nearUrl: string;
   mesh: Mesh;
   mat: MeshBasicMaterial;
   star: Mesh;
@@ -88,6 +91,13 @@ type Rec = {
 };
 
 type Cached = { tex: Texture; aspect: number };
+type TierName = "preview" | "near";
+type Slot = { preview?: Cached; near?: Cached };
+
+const PREVIEW_PX = 128;
+const NEAR_KEEP = 36;
+const PREVIEW_LIMIT = 12;
+const NEAR_LIMIT = 2;
 
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
@@ -109,10 +119,13 @@ function hdr(mat: MeshBasicMaterial, r: number, g: number, b: number) {
   mat.color.b = b;
 }
 
-function textureSource(photo: Photo, quality: "fast" | "sharp") {
+function textureSource(photo: Photo, width: number) {
   if (!photo.localRef) return photo.url;
-  const width = quality === "sharp" ? 1280 : 640;
   return `/api/local/thumb?p=${encodeURIComponent(photo.localRef)}&w=${width}&v=${Math.round(photo.mtime)}`;
+}
+
+function nearPixels(quality: "fast" | "sharp") {
+  return quality === "sharp" ? 960 : 640;
 }
 
 function libraryKey(photos: Photo[], quality: string) {
@@ -337,14 +350,16 @@ export function mountWorld(canvas: HTMLCanvasElement) {
   const up = new Vector3(0, 1, 0);
 
   const records = new Map<string, Rec>();
-  const cache = new Map<string, Cached>();
-  const pending = new Set<string>();
+  const slots = new Map<string, Slot>();
+  const pendingPreview = new Set<string>();
+  const pendingNear = new Set<string>();
   let trash: Array<() => void> = [];
   let pulses: Mesh[] = [];
   let solids: Block[] = [];
   let loop: Layout["loop"] = null;
   let token = 0;
-  let inflight = 0;
+  let previewInflight = 0;
+  let nearInflight = 0;
   let texQuality = useExplorer.getState().quality;
   let sourceKey = "";
   let fogBase = useExplorer.getState().fog;
@@ -382,16 +397,24 @@ export function mountWorld(canvas: HTMLCanvasElement) {
     obj.quaternion.setFromRotationMatrix(basis);
   }
 
+  function releaseTex(entry: Cached | undefined) {
+    if (!entry) return;
+    entry.tex.dispose();
+    const image = entry.tex.image as { close?: () => void } | undefined;
+    image?.close?.();
+  }
+
   function clearCache() {
     token += 1;
-    inflight = 0;
-    pending.clear();
-    for (const entry of cache.values()) {
-      entry.tex.dispose();
-      const image = entry.tex.image as { close?: () => void } | undefined;
-      image?.close?.();
+    previewInflight = 0;
+    nearInflight = 0;
+    pendingPreview.clear();
+    pendingNear.clear();
+    for (const slot of slots.values()) {
+      releaseTex(slot.preview);
+      releaseTex(slot.near);
     }
-    cache.clear();
+    slots.clear();
   }
 
   function clearContent() {
@@ -440,7 +463,7 @@ export function mountWorld(canvas: HTMLCanvasElement) {
     });
   }
 
-  function addPhoto(node: PhotoNode, url: string, span: number | null) {
+  function addPhoto(node: PhotoNode, previewUrl: string, nearUrl: string, span: number | null) {
     const mat = new MeshBasicMaterial({ color: 0x3a342c, side: DoubleSide, toneMapped: false });
     const mesh = new Mesh(photoGeo, mat);
     mesh.position.set(node.position[0], node.position[1], node.position[2]);
@@ -477,7 +500,8 @@ export function mountWorld(canvas: HTMLCanvasElement) {
     }
     const rec: Rec = {
       id: node.id,
-      url,
+      previewUrl,
+      nearUrl,
       mesh,
       mat,
       star,
@@ -489,8 +513,9 @@ export function mountWorld(canvas: HTMLCanvasElement) {
       face: node.faceCamera,
     };
     records.set(node.id, rec);
-    const cached = cache.get(node.id);
-    if (cached) applyCached(rec, cached);
+    const slot = slots.get(node.id);
+    const show = slot?.near ?? slot?.preview;
+    if (show) applyCached(rec, show);
   }
 
   function blockMaterial(color: BlockColor) {
@@ -604,10 +629,19 @@ export function mountWorld(canvas: HTMLCanvasElement) {
     keyLight.castShadow = shadowsOn;
     clearContent();
     loop = layout.loop;
-    const urls = new Map(photos.map((photo) => [photo.id, textureSource(photo, texQuality)]));
+    const byId = new Map(photos.map((photo) => [photo.id, photo]));
     for (const node of layout.nodes) {
       if (node.kind === "label") addLabel(node.text, node.position);
-      else addPhoto(node, urls.get(node.id) ?? "", layout.loop?.span ?? null);
+      else {
+        const photo = byId.get(node.id);
+        if (!photo) continue;
+        addPhoto(
+          node,
+          textureSource(photo, PREVIEW_PX),
+          textureSource(photo, nearPixels(texQuality)),
+          layout.loop?.span ?? null,
+        );
+      }
     }
     addBlocks(layout.blocks);
     dress(layout);
@@ -685,7 +719,10 @@ export function mountWorld(canvas: HTMLCanvasElement) {
       if (state.omitted !== layout.omitted) useExplorer.getState().patch({ omitted: layout.omitted });
     } else {
       for (const rec of records.values()) {
-        if (!cache.has(rec.id)) {
+        const slot = slots.get(rec.id);
+        const show = slot?.near ?? slot?.preview;
+        if (show) applyCached(rec, show);
+        else {
           rec.mat.map = null;
           rec.mat.color.setHex(0x3a342c);
           rec.mat.needsUpdate = true;
@@ -694,7 +731,9 @@ export function mountWorld(canvas: HTMLCanvasElement) {
     }
     for (const photo of vis) {
       const rec = records.get(photo.id);
-      if (rec) rec.url = textureSource(photo, texQuality);
+      if (!rec) continue;
+      rec.previewUrl = textureSource(photo, PREVIEW_PX);
+      rec.nearUrl = textureSource(photo, nearPixels(texQuality));
     }
     pump();
   }
@@ -719,20 +758,46 @@ export function mountWorld(canvas: HTMLCanvasElement) {
     };
   }
 
-  async function loadOne(id: string, url: string, generation: number) {
+  function rankedRecords() {
+    return [...records.values()].sort((a, b) => a.base.distanceToSquared(pos) - b.base.distanceToSquared(pos));
+  }
+
+  function showBest(id: string) {
+    const slot = slots.get(id);
+    const show = slot?.near ?? slot?.preview;
+    const rec = records.get(id);
+    if (!rec) return;
+    if (show) applyCached(rec, show);
+    else {
+      rec.mat.map = null;
+      rec.mat.color.setHex(0x3a342c);
+      rec.mat.needsUpdate = true;
+    }
+  }
+
+  function trimNear() {
+    const keep = new Set(rankedRecords().slice(0, NEAR_KEEP).map((rec) => rec.id));
+    for (const [id, slot] of slots) {
+      if (!slot.near || keep.has(id)) continue;
+      releaseTex(slot.near);
+      delete slot.near;
+      showBest(id);
+    }
+  }
+
+  async function loadTier(id: string, url: string, tier: TierName, maxW: number, generation: number) {
+    const pending = tier === "preview" ? pendingPreview : pendingNear;
     pending.add(id);
-    inflight += 1;
+    if (tier === "preview") previewInflight += 1;
+    else nearInflight += 1;
+    let bitmap: ImageBitmap | null = null;
     try {
       const response = await fetch(url);
       if (!response.ok) throw new Error("image");
       const blob = await response.blob();
       if (generation !== token || dead) return;
-      const maxW = texQuality === "sharp" ? 1280 : 640;
-      // ImageBitmap uploads ignore Texture.flipY, so a normal bitmap lands
-      // upside down on the plane. "flipY" applies the camera's EXIF orientation
-      // first, then stores the pixels the way WebGL samples them. Left and
-      // right stay put.
-      let bitmap: ImageBitmap;
+      // ImageBitmap uploads ignore Texture.flipY. "flipY" applies EXIF, then
+      // stores the pixels the way WebGL samples them.
       try {
         bitmap = await createImageBitmap(blob, {
           resizeWidth: maxW,
@@ -746,58 +811,50 @@ export function mountWorld(canvas: HTMLCanvasElement) {
           bitmap = await createImageBitmap(blob);
         }
       }
-      if (generation !== token || dead) {
-        bitmap.close();
-        return;
-      }
+      if (generation !== token || dead) return;
       const aspect = bitmap.width / Math.max(1, bitmap.height);
       const tex = new Texture(bitmap);
       tex.flipY = false;
-      tex.needsUpdate = true;
       tex.colorSpace = SRGBColorSpace;
-      tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
-      cache.set(id, { tex, aspect });
-      const rec = records.get(id);
-      if (rec) applyCached(rec, { tex, aspect });
-      evict();
-      const count = cache.size;
+      tex.generateMipmaps = tier === "near";
+      tex.minFilter = tier === "near" ? LinearMipmapLinearFilter : LinearFilter;
+      tex.anisotropy = tier === "near" ? Math.min(4, renderer.capabilities.getMaxAnisotropy()) : 1;
+      tex.needsUpdate = true;
+      const slot = slots.get(id) ?? {};
+      releaseTex(slot[tier]);
+      slot[tier] = { tex, aspect };
+      slots.set(id, slot);
+      if (tier === "near") trimNear();
+      showBest(id);
+      const count = [...slots.values()].filter((item) => item.preview || item.near).length;
       if (useExplorer.getState().loadedTextures !== count) useExplorer.getState().patch({ loadedTextures: count });
+      bitmap = null;
     } catch {
       /* keep the warm placeholder */
     } finally {
+      bitmap?.close();
       pending.delete(id);
-      inflight = Math.max(0, inflight - 1);
-    }
-  }
-
-  function evict() {
-    if (cache.size <= 72) return;
-    const ranked = [...records.values()].sort(
-      (a, b) => a.mesh.position.distanceToSquared(camera.position) - b.mesh.position.distanceToSquared(camera.position),
-    );
-    const keep = new Set(ranked.slice(0, 48).map((rec) => rec.id));
-    for (const [id, entry] of cache) {
-      if (keep.has(id)) continue;
-      entry.tex.dispose();
-      cache.delete(id);
-      const rec = records.get(id);
-      if (rec) {
-        rec.mat.map = null;
-        rec.mat.color.setHex(0x3a342c);
-        rec.mat.needsUpdate = true;
-      }
+      if (tier === "preview") previewInflight = Math.max(0, previewInflight - 1);
+      else nearInflight = Math.max(0, nearInflight - 1);
+      if (generation === token && !dead) pump();
     }
   }
 
   function pump() {
-    if (inflight >= 6) return;
-    const ranked = [...records.values()]
-      .filter((rec) => rec.url && !cache.has(rec.id) && !pending.has(rec.id))
-      .sort((a, b) => a.base.distanceToSquared(pos) - b.base.distanceToSquared(pos));
+    const ranked = rankedRecords();
     const generation = token;
     for (const rec of ranked) {
-      if (inflight >= 6) break;
-      void loadOne(rec.id, rec.url, generation);
+      if (previewInflight >= PREVIEW_LIMIT) break;
+      const slot = slots.get(rec.id);
+      if (slot?.preview || pendingPreview.has(rec.id) || !rec.previewUrl) continue;
+      void loadTier(rec.id, rec.previewUrl, "preview", PREVIEW_PX, generation);
+    }
+    const nearW = nearPixels(texQuality);
+    for (const rec of ranked.slice(0, NEAR_KEEP)) {
+      if (nearInflight >= NEAR_LIMIT) break;
+      const slot = slots.get(rec.id);
+      if (slot?.near || pendingNear.has(rec.id) || !rec.nearUrl) continue;
+      void loadTier(rec.id, rec.nearUrl, "near", nearW, generation);
     }
   }
 
