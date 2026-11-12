@@ -955,7 +955,10 @@ function Inspector({
   onClose: () => void;
   onStep: (delta: number) => void;
 }) {
-  const mark = useExplorer((s) => s.marks[photo.id] ?? emptyMark());
+  // Keep the fallback outside the selector. emptyMark() is a new object, and a
+  // selector that returns a new object on every read makes React treat the
+  // store as changed and re-render until it hits the update limit.
+  const mark = useExplorer((s) => s.marks[photo.id]) ?? emptyMark();
   const toggleStar = useExplorer((s) => s.toggleStar);
   const toggleHidden = useExplorer((s) => s.toggleHidden);
   const setNote = useExplorer((s) => s.setNote);
