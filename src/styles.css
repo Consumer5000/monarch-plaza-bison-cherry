@@ -3,13 +3,13 @@
 @theme {
   --font-sans: "Outfit", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Fraunces", Georgia, serif;
-  --color-bg: #12081c;
-  --color-surface: #1d1430;
-  --color-fg: #f6f1ea;
-  --color-muted: #b7adc4;
-  --color-brass: #e4c6ff;
-  --color-tide: #7ef0e2;
-  --color-line: #3a2c52;
+  --color-bg: #141210;
+  --color-surface: #221f1b;
+  --color-fg: #f4efe6;
+  --color-muted: #b7aea2;
+  --color-brass: #d7b56d;
+  --color-tide: #d7b56d;
+  --color-line: #3a342c;
   --radius-md: 0.7rem;
 }
 

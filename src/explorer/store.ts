@@ -24,6 +24,9 @@ type ExplorerState = {
   speed: number;
   fog: number;
   quality: "fast" | "sharp";
+  glow: boolean;
+  stylized: boolean;
+  settingsOpen: boolean;
   autoGlide: boolean;
   folderName: string;
   source: "empty" | "demo" | "folder";
@@ -88,7 +91,10 @@ export const useExplorer = create<ExplorerState>((set, get) => ({
   size: 1.7,
   speed: 1,
   fog: 0.012,
-  quality: "fast",
+  quality: "sharp",
+  glow: false,
+  stylized: false,
+  settingsOpen: false,
   autoGlide: false,
   folderName: "Demo library",
   source: "demo",
@@ -196,6 +202,52 @@ export const useExplorer = create<ExplorerState>((set, get) => ({
   },
 }));
 
+const SETTINGS_KEY = "drift-hall-settings";
+const MODES: Mode[] = ["grid", "gallery", "float", "tunnel", "spiral", "maze"];
+
+function readHallSettings(): Partial<Pick<ExplorerState, "glow" | "stylized" | "mode" | "surface" | "quality">> | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    const row = parsed as Partial<ExplorerState>;
+    const next: Partial<Pick<ExplorerState, "glow" | "stylized" | "mode" | "surface" | "quality">> = {};
+    if (typeof row.glow === "boolean") next.glow = row.glow;
+    if (typeof row.stylized === "boolean") next.stylized = row.stylized;
+    if (row.mode && MODES.includes(row.mode)) next.mode = row.mode;
+    if (row.surface === "space" || row.surface === "index") next.surface = row.surface;
+    if (row.quality === "fast" || row.quality === "sharp") next.quality = row.quality;
+    return next;
+  } catch {
+    return null;
+  }
+}
+
+export function loadHallSettings() {
+  const saved = readHallSettings();
+  if (saved) useExplorer.setState(saved);
+}
+
+function writeHallSettings() {
+  const state = useExplorer.getState();
+  try {
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify({
+        glow: state.glow,
+        stylized: state.stylized,
+        mode: state.mode,
+        surface: state.surface,
+        quality: state.quality,
+      }),
+    );
+  } catch {
+    /* private mode */
+  }
+}
+
 if (typeof window !== "undefined") {
   let timer = 0;
   useExplorer.subscribe((state, previous) => {
@@ -205,5 +257,17 @@ if (typeof window !== "undefined") {
       const current = useExplorer.getState();
       void writeSaved({ version: 1, marks: current.marks, albums: current.albums });
     }, 400);
+  });
+  useExplorer.subscribe((state, previous) => {
+    if (
+      state.glow === previous.glow &&
+      state.stylized === previous.stylized &&
+      state.mode === previous.mode &&
+      state.surface === previous.surface &&
+      state.quality === previous.quality
+    ) {
+      return;
+    }
+    writeHallSettings();
   });
 }

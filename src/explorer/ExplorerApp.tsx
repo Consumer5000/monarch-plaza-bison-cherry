@@ -8,6 +8,7 @@ import {
   EyeOff,
   FolderOpen,
   Search,
+  Settings,
   Star,
   Upload,
   X,
@@ -39,11 +40,10 @@ import {
 } from "./local";
 import { isSaved, readSaved } from "./persist";
 import { allTags, formatBytes, formatWhen, visiblePhotos } from "./query";
-import { useExplorer } from "./store";
-import { MODE_LABEL, emptyMark, type Mode, type Photo } from "./types";
+import { loadHallSettings, useExplorer } from "./store";
+import { MODE_LABEL, MODE_ORDER, emptyMark, type Mode, type Photo } from "./types";
 
 const HINT_KEY = "drift-hall-hint";
-const EXTRA_MODES: Mode[] = ["float", "tunnel", "spiral", "maze"];
 
 function librarySummary(count: number, capped: boolean, skippedHeic: number) {
   const parts = [`${count} photos`];
@@ -167,6 +167,7 @@ export function ExplorerApp() {
   const dragDepth = useRef(0);
 
   useEffect(() => {
+    loadHallSettings();
     try {
       if (localStorage.getItem(HINT_KEY) !== "1") useExplorer.getState().patch({ hintOpen: true });
     } catch {
@@ -445,8 +446,13 @@ export function ExplorerApp() {
   }
 
   const selected = state.photos.find((photo) => photo.id === state.selectedId) ?? null;
-  const aimed = state.photos.find((photo) => photo.id === state.aimId) ?? null;
   const tags = allTags(state.marks);
+
+  function chooseView(id: Mode | "index") {
+    if (id === "index") state.setSurface("index");
+    else state.setMode(id);
+    state.patch({ settingsOpen: false });
+  }
   function dismissHint() {
     state.patch({ hintOpen: false });
     try {
@@ -455,10 +461,6 @@ export function ExplorerApp() {
       /* private mode */
     }
   }
-
-  const cursor = Math.max(0, visible.findIndex((photo) => photo.id === (state.selectedId ?? state.aimId)));
-  const stripStart = Math.max(0, Math.min(cursor - 6, Math.max(visible.length - 16, 0)));
-  const strip = visible.slice(stripStart, stripStart + 16);
   return (
     <main className="relative h-dvh w-full overflow-hidden bg-bg text-fg">
       <LoadMeter />
@@ -529,25 +531,29 @@ export function ExplorerApp() {
           <button type="button" className={btn} aria-pressed={state.hintOpen} onClick={() => state.patch({ hintOpen: true })}>
             Help
           </button>
+          <button
+            type="button"
+            className={btn}
+            aria-pressed={state.settingsOpen}
+            aria-label="Settings"
+            onClick={() => state.patch({ settingsOpen: !state.settingsOpen, hintOpen: false })}
+          >
+            <Settings className="size-4" aria-hidden />
+          </button>
         </div>
       </header>
 
       {state.hintOpen ? (
         <div className="absolute inset-x-3 top-36 z-30 mx-auto flex max-w-md items-center gap-3 rounded-md border border-line bg-surface/95 px-3 py-2 text-sm shadow-lg">
-          <p className="min-w-0 flex-1">Walk with W A S D. Drag to look. Click a picture.</p>
+          <p className="min-w-0 flex-1">Walk with W A S D. Drag to look. Click a picture. Esc opens settings.</p>
           <button type="button" className={btn} onClick={dismissHint}>
             Got it
           </button>
         </div>
       ) : null}
 
-      {state.surface === "space" ? (
-        <div className="pointer-events-none absolute top-1/2 left-1/2 z-10 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center">
-          <span className="size-1.5 rounded-full bg-fg/80" />
-          {aimed ? (
-            <p className="mt-2 max-w-56 truncate text-center text-xs text-fg/90">{aimed.caption || aimed.name}</p>
-          ) : null}
-        </div>
+      {state.surface === "space" && !state.settingsOpen ? (
+        <div className="pointer-events-none absolute top-1/2 left-1/2 z-10 size-1.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-fg/70" />
       ) : null}
 
       {state.surface === "index" ? (
@@ -569,63 +575,13 @@ export function ExplorerApp() {
         </section>
       ) : null}
 
-      {state.surface === "space" ? (
-        <div className="absolute inset-x-0 bottom-4 z-20 px-3">
-          {visible.length ? (
-            <>
-              <div className="mb-2 flex items-center gap-2">
-                <button type="button" className={btn} onClick={() => step(-1)} aria-label="Previous photo">
-                  <ChevronLeft className="size-4" />
-                </button>
-                <input
-                  className="h-11 min-w-0 flex-1"
-                  type="range"
-                  min={0}
-                  max={Math.max(visible.length - 1, 0)}
-                  value={Math.min(cursor, Math.max(visible.length - 1, 0))}
-                  aria-label="Choose a picture"
-                  onChange={(event) => {
-                    const photo = visible[Number(event.target.value)];
-                    if (photo) state.requestFocus(photo.id);
-                  }}
-                />
-                <button type="button" className={btn} onClick={() => step(1)} aria-label="Next photo">
-                  <ChevronRight className="size-4" />
-                </button>
-                <span className="hidden w-28 shrink-0 text-right text-xs text-muted sm:block">
-                  {formatWhen(visible[Math.min(cursor, visible.length - 1)]!.taken)}
-                </span>
-              </div>
-              <div className="flex gap-1.5 overflow-x-auto pb-1">
-                {strip.map((photo, index) => {
-                  const on = photo.id === (state.selectedId ?? state.aimId);
-                  return (
-                    <button
-                      key={photo.id}
-                      type="button"
-                      title={`${photo.name} · ${formatWhen(photo.taken)}`}
-                      className={`h-14 w-14 shrink-0 overflow-hidden rounded-md border ${on ? "border-brass" : "border-line"}`}
-                      onClick={() => state.requestFocus(photo.id)}
-                    >
-                      <img
-                        src={photo.thumb}
-                        alt=""
-                        className="h-full w-full object-cover"
-                        loading={index < 8 ? "eager" : "lazy"}
-                        decoding="async"
-                      />
-                    </button>
-                  );
-                })}
-              </div>
-            </>
-          ) : state.booting ? null : (
-            <EmptyFilter />
-          )}
+      {state.surface === "space" && !state.booting && !visible.length ? (
+        <div className="absolute top-36 left-1/2 z-20 -translate-x-1/2">
+          <EmptyFilter />
         </div>
       ) : null}
 
-      <div className={`${selected || state.drawerOpen ? "hidden" : "absolute bottom-44 left-3 z-20 grid grid-cols-3 gap-1 md:hidden"}`}>
+      <div className={`${selected || state.drawerOpen || state.settingsOpen ? "hidden" : "absolute bottom-6 left-3 z-20 grid grid-cols-3 gap-1 md:hidden"}`}>
         <span />
         <Hold code="KeyW" label="W" />
         <span />
@@ -633,6 +589,61 @@ export function ExplorerApp() {
         <Hold code="KeyS" label="S" />
         <Hold code="KeyD" label="D" />
       </div>
+
+      {state.settingsOpen ? (
+        <aside className="absolute top-0 right-0 z-40 flex h-full w-[min(100%,22rem)] flex-col gap-5 overflow-y-auto border-l border-line bg-surface/95 p-4 pt-6 backdrop-blur-md">
+          <div className="flex items-center justify-between">
+            <h2 className="font-display text-2xl">Settings</h2>
+            <button type="button" className={btn} onClick={() => state.patch({ settingsOpen: false })} aria-label="Close settings">
+              <X className="size-4" />
+            </button>
+          </div>
+          <div>
+            <p className="mb-2 text-xs text-muted">View</p>
+            <div className="flex flex-wrap gap-1.5">
+              {MODE_ORDER.map((mode) => {
+                const on = state.surface === "space" && state.mode === mode;
+                return (
+                  <button key={mode} type="button" className={`${chip} ${on ? onBtn : ""}`} aria-pressed={on} onClick={() => chooseView(mode)}>
+                    {MODE_LABEL[mode]}
+                  </button>
+                );
+              })}
+              <button
+                type="button"
+                className={`${chip} ${state.surface === "index" ? onBtn : ""}`}
+                aria-pressed={state.surface === "index"}
+                onClick={() => chooseView("index")}
+              >
+                All photos
+              </button>
+            </div>
+          </div>
+          <label className="flex min-h-11 items-center justify-between gap-3 text-sm">
+            Glow
+            <input type="checkbox" className="size-4" checked={state.glow} onChange={(event) => state.patch({ glow: event.target.checked })} />
+          </label>
+          <label className="flex min-h-11 items-center justify-between gap-3 text-sm">
+            Dreamy colors
+            <input
+              type="checkbox"
+              className="size-4"
+              checked={state.stylized}
+              onChange={(event) => state.patch({ stylized: event.target.checked })}
+            />
+          </label>
+          <label className="flex min-h-11 items-center justify-between gap-3 text-sm">
+            Sharper pictures
+            <input
+              type="checkbox"
+              className="size-4"
+              checked={state.quality === "sharp"}
+              onChange={(event) => state.patch({ quality: event.target.checked ? "sharp" : "fast" })}
+            />
+          </label>
+          <p className="text-xs leading-relaxed text-muted">These choices stay on this computer. Esc closes this panel.</p>
+        </aside>
+      ) : null}
 
       {state.drawerOpen ? (
         <aside className="absolute top-0 left-0 z-40 flex h-full w-[min(100%,22rem)] flex-col gap-4 overflow-y-auto border-r border-line bg-surface/95 p-4 pt-6 backdrop-blur-md">
@@ -696,28 +707,6 @@ export function ExplorerApp() {
             <input type="checkbox" className="size-4" checked={state.showHidden} onChange={(event) => state.patch({ showHidden: event.target.checked })} />
             Show hidden
           </label>
-          <div className="flex flex-wrap gap-1.5">
-            <button
-              type="button"
-              className={`${chip} ${state.mode === "gallery" && state.surface === "space" ? onBtn : ""}`}
-              onClick={() => {
-                state.setMode("gallery");
-                state.patch({ drawerOpen: false });
-              }}
-            >
-              Rooms
-            </button>
-            <button
-              type="button"
-              className={`${chip} ${state.mode === "grid" && state.surface === "space" ? onBtn : ""}`}
-              onClick={() => {
-                state.setMode("grid");
-                state.patch({ drawerOpen: false });
-              }}
-            >
-              By date
-            </button>
-          </div>
           {tags.length ? (
             <div className="flex flex-wrap gap-1.5">
               {tags.map((tag) => (
@@ -750,21 +739,6 @@ export function ExplorerApp() {
           <details className="rounded-md border border-line px-3 py-2">
             <summary className="cursor-pointer py-2 text-sm">More options</summary>
             <div className="flex flex-col gap-4 pt-2">
-              <div className="flex flex-wrap gap-1.5">
-                {EXTRA_MODES.map((mode) => (
-                  <button
-                    key={mode}
-                    type="button"
-                    className={`${chip} ${state.mode === mode && state.surface === "space" ? onBtn : ""}`}
-                    onClick={() => {
-                      state.setMode(mode);
-                      state.patch({ drawerOpen: false });
-                    }}
-                  >
-                    {MODE_LABEL[mode]}
-                  </button>
-                ))}
-              </div>
               <label className="flex flex-col gap-1 text-xs text-muted">
                 Group rooms by
                 <select className={field} value={state.groupBy} onChange={(event) => state.patch({ groupBy: event.target.value as typeof state.groupBy })}>
@@ -788,14 +762,6 @@ export function ExplorerApp() {
                 Picture size {state.size.toFixed(2)}
                 <input type="range" min={0.9} max={2.8} step={0.05} value={state.size} onChange={(event) => state.patch({ size: Number(event.target.value) })} />
               </label>
-              <div className="flex gap-2">
-                <button type="button" className={`${btn} ${state.quality === "fast" ? onBtn : ""}`} onClick={() => state.patch({ quality: "fast" })}>
-                  Faster
-                </button>
-                <button type="button" className={`${btn} ${state.quality === "sharp" ? onBtn : ""}`} onClick={() => state.patch({ quality: "sharp" })}>
-                  Sharper
-                </button>
-              </div>
               <label className="flex min-h-11 items-center gap-2 text-sm">
                 <input type="checkbox" className="size-4" checked={state.autoGlide} onChange={(event) => state.patch({ autoGlide: event.target.checked })} />
                 Drift forward on your own
