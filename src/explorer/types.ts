@@ -70,9 +70,9 @@ export type Layout = {
 export const MODE_ORDER: Mode[] = ["grid", "gallery", "float", "tunnel", "spiral", "maze"];
 
 export const MODE_LABEL: Record<Mode, string> = {
-  grid: "Date grid",
-  gallery: "Gallery",
-  float: "Float",
+  grid: "By date",
+  gallery: "Rooms",
+  float: "Floating",
   tunnel: "Tunnel",
   spiral: "Spiral",
   maze: "Maze",

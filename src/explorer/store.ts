@@ -42,6 +42,7 @@ type ExplorerState = {
   focusId: string | null;
   focusNonce: number;
   helpOpen: boolean;
+  hintOpen: boolean;
   drawerOpen: boolean;
   booting: boolean;
   setMode: (mode: Mode) => void;
@@ -72,7 +73,7 @@ export const useExplorer = create<ExplorerState>((set, get) => ({
   photos: demoPhotos,
   marks: {},
   albums: [],
-  mode: "grid",
+  mode: "gallery",
   surface: "space",
   sort: "oldest",
   groupBy: "date",
@@ -86,7 +87,7 @@ export const useExplorer = create<ExplorerState>((set, get) => ({
   cols: 6,
   size: 1.7,
   speed: 1,
-  fog: 0.018,
+  fog: 0.012,
   quality: "fast",
   autoGlide: false,
   folderName: "Demo library",
@@ -106,6 +107,7 @@ export const useExplorer = create<ExplorerState>((set, get) => ({
   focusId: null,
   focusNonce: 0,
   helpOpen: false,
+  hintOpen: false,
   drawerOpen: false,
   booting: true,
   setMode: (mode) => set({ mode, surface: "space" }),

@@ -1,24 +1,15 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   Bookmark,
-  Building2,
   ChevronLeft,
   ChevronRight,
-  CircleHelp,
-  Cylinder,
   Download,
   Eye,
   EyeOff,
   FolderOpen,
-  Image as ImageIcon,
-  LayoutGrid,
-  Orbit,
   Search,
-  SlidersHorizontal,
   Star,
   Upload,
-  Waypoints,
-  Wind,
   X,
 } from "lucide-react";
 import { setHeld } from "./input";
@@ -49,16 +40,10 @@ import {
 import { isSaved, readSaved } from "./persist";
 import { allTags, formatBytes, formatWhen, visiblePhotos } from "./query";
 import { useExplorer } from "./store";
-import { MODE_LABEL, MODE_ORDER, emptyMark, type Mode, type Photo } from "./types";
+import { MODE_LABEL, emptyMark, type Mode, type Photo } from "./types";
 
-const MODE_ICON: Record<Mode, typeof LayoutGrid> = {
-  grid: LayoutGrid,
-  gallery: Building2,
-  float: Wind,
-  tunnel: Cylinder,
-  spiral: Orbit,
-  maze: Waypoints,
-};
+const HINT_KEY = "drift-hall-hint";
+const EXTRA_MODES: Mode[] = ["float", "tunnel", "spiral", "maze"];
 
 function librarySummary(count: number, capped: boolean, skippedHeic: number) {
   const parts = [`${count} photos`];
@@ -93,7 +78,7 @@ async function ingestFiles(files: File[], folderName: string, writable: boolean)
         if (useExplorer.getState().libraryEpoch !== epoch) return;
         if (updates) {
           useExplorer.getState().applyTaken(epoch, updates);
-          useExplorer.getState().toastMessage("Camera dates are in, so the rooms shifted to match.");
+          useExplorer.getState().toastMessage("Picture dates updated.");
         } else {
           useExplorer.getState().patch({ pendingDates: false });
         }
@@ -143,7 +128,7 @@ async function loadLocalLibrary() {
         if (Math.abs(prev - item.taken) > 60_000) shifted = true;
       }
       useExplorer.getState().applyTaken(epoch, map);
-      if (shifted) useExplorer.getState().toastMessage("Camera dates are in, so the rooms shifted to match.");
+      if (shifted) useExplorer.getState().toastMessage("Picture dates updated.");
     })
     .catch(() => {
       if (useExplorer.getState().libraryEpoch === epoch) useExplorer.getState().patch({ pendingDates: false });
@@ -180,6 +165,14 @@ export function ExplorerApp() {
   const pathInput = useRef<HTMLInputElement>(null);
   const folderSeen = useRef("");
   const dragDepth = useRef(0);
+
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(HINT_KEY) !== "1") useExplorer.getState().patch({ hintOpen: true });
+    } catch {
+      useExplorer.getState().patch({ hintOpen: true });
+    }
+  }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -454,11 +447,18 @@ export function ExplorerApp() {
   const selected = state.photos.find((photo) => photo.id === state.selectedId) ?? null;
   const aimed = state.photos.find((photo) => photo.id === state.aimId) ?? null;
   const tags = allTags(state.marks);
+  function dismissHint() {
+    state.patch({ hintOpen: false });
+    try {
+      localStorage.setItem(HINT_KEY, "1");
+    } catch {
+      /* private mode */
+    }
+  }
+
   const cursor = Math.max(0, visible.findIndex((photo) => photo.id === (state.selectedId ?? state.aimId)));
   const stripStart = Math.max(0, Math.min(cursor - 6, Math.max(visible.length - 16, 0)));
   const strip = visible.slice(stripStart, stripStart + 16);
-  const walking = state.mode === "gallery" || state.mode === "maze";
-
   return (
     <main className="relative h-dvh w-full overflow-hidden bg-bg text-fg">
       <LoadMeter />
@@ -485,99 +485,65 @@ export function ExplorerApp() {
         }}
       />
 
-      <header className="absolute inset-x-0 top-0 z-30 flex flex-col gap-2 px-3 pt-3">
-        <div className="flex items-center gap-2">
-          <div className="min-w-0">
-            <p className="font-display text-xl leading-none tracking-tight">Drift Hall</p>
-            <p className="truncate text-xs text-muted">
-              {state.busy
-                ? state.busy
-                : state.pendingDates
-                  ? "Matching camera dates"
-                  : state.photos.length === 0
-                  ? state.runtime === "local"
-                    ? "Opening your photos"
-                    : "Opening the demo library"
+      <header className="absolute inset-x-0 top-0 z-30 flex flex-wrap items-center gap-2 px-3 pt-3">
+        <div className="min-w-0">
+          <p className="font-display text-xl leading-none tracking-tight">Drift Hall</p>
+          <p className="truncate text-xs text-muted">
+            {state.busy
+              ? state.busy
+              : state.pendingDates
+                ? "Reading dates"
+                : state.photos.length === 0
+                  ? "Opening pictures"
                   : state.source === "demo"
-                    ? state.runtime === "local"
-                      ? "Sample library · choose a folder on this computer"
-                      : "Sample library · open a folder for your own"
-                    : state.folderName || "Library"}
-            </p>
-          </div>
-          <div className="ml-auto flex items-center gap-1.5">
-            {resume ? (
-              <button type="button" className={btn} onClick={() => void resumeFolder()}>
-                Resume
-              </button>
-            ) : null}
-            <button type="button" className={btn} onClick={() => void openFolder()}>
-              <FolderOpen className="size-4" aria-hidden />
-              <span className="hidden sm:inline">Open folder</span>
-              <span className="sm:hidden">Open</span>
-            </button>
-            <button
-              type="button"
-              className={btn}
-              aria-pressed={state.drawerOpen}
-              onClick={() => state.patch({ drawerOpen: !state.drawerOpen })}
-            >
-              <SlidersHorizontal className="size-4" aria-hidden />
-              <span className="hidden md:inline">Library</span>
-            </button>
-            <button
-              type="button"
-              className={btn}
-              aria-pressed={state.helpOpen}
-              onClick={() => state.patch({ helpOpen: !state.helpOpen })}
-            >
-              <CircleHelp className="size-4" aria-hidden />
-              <span className="sr-only">Help</span>
-            </button>
-          </div>
+                    ? "Sample pictures"
+                    : state.folderName || "Pictures"}
+          </p>
         </div>
-        <div className="flex max-w-full items-center gap-1 overflow-x-auto pb-1">
-          {MODE_ORDER.map((mode, index) => {
-            const Icon = MODE_ICON[mode];
-            const on = state.mode === mode && state.surface === "space";
-            return (
-              <button
-                key={mode}
-                type="button"
-                title={`${MODE_LABEL[mode]} (${index + 1})`}
-                aria-pressed={on}
-                className={`${btn} shrink-0 ${on ? onBtn : ""}`}
-                onClick={() => state.setMode(mode)}
-              >
-                <Icon className="size-4" aria-hidden />
-                <span className="hidden md:inline">{MODE_LABEL[mode]}</span>
-              </button>
-            );
-          })}
+        <div className="ml-auto flex flex-wrap items-center gap-1.5">
+          {resume ? (
+            <button type="button" className={btn} onClick={() => void resumeFolder()}>
+              Resume
+            </button>
+          ) : null}
+          <button type="button" className={btn} onClick={() => void openFolder()}>
+            <FolderOpen className="size-4" aria-hidden />
+            Open
+          </button>
           <button
             type="button"
-            className={`${btn} shrink-0 ${state.surface === "index" ? onBtn : ""}`}
+            className={btn}
             aria-pressed={state.surface === "index"}
             onClick={() => state.setSurface(state.surface === "index" ? "space" : "index")}
           >
-            <ImageIcon className="size-4" aria-hidden />
-            <span className="hidden md:inline">Index</span>
+            {state.surface === "index" ? "Back" : "All photos"}
           </button>
-          <span className="ml-auto hidden shrink-0 items-center px-2 text-xs tracking-[0.18em] text-brass sm:flex">
-            {state.heading}
-          </span>
+          <button
+            type="button"
+            className={btn}
+            aria-pressed={state.drawerOpen}
+            onClick={() => state.patch({ drawerOpen: !state.drawerOpen })}
+          >
+            Pictures
+          </button>
+          <button type="button" className={btn} aria-pressed={state.hintOpen} onClick={() => state.patch({ hintOpen: true })}>
+            Help
+          </button>
         </div>
       </header>
 
-      {state.surface === "space" && !state.helpOpen ? (
-        <div className="pointer-events-none absolute top-1/2 left-1/2 z-10 -translate-x-1/2 -translate-y-1/2">
-          <div className="relative size-8">
-            <span className="absolute top-0 left-1/2 h-2.5 w-px -translate-x-1/2 bg-tide shadow-[0_0_8px_var(--color-tide)]" />
-            <span className="absolute bottom-0 left-1/2 h-2.5 w-px -translate-x-1/2 bg-tide shadow-[0_0_8px_var(--color-tide)]" />
-            <span className="absolute top-1/2 left-0 h-px w-2.5 -translate-y-1/2 bg-tide shadow-[0_0_8px_var(--color-tide)]" />
-            <span className="absolute top-1/2 right-0 h-px w-2.5 -translate-y-1/2 bg-tide shadow-[0_0_8px_var(--color-tide)]" />
-            <span className="absolute top-1/2 left-1/2 size-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-tide" />
-          </div>
+      {state.hintOpen ? (
+        <div className="absolute inset-x-3 top-36 z-30 mx-auto flex max-w-md items-center gap-3 rounded-md border border-line bg-surface/95 px-3 py-2 text-sm shadow-lg">
+          <p className="min-w-0 flex-1">Walk with W A S D. Drag to look. Click a picture.</p>
+          <button type="button" className={btn} onClick={dismissHint}>
+            Got it
+          </button>
+        </div>
+      ) : null}
+
+      {state.surface === "space" ? (
+        <div className="pointer-events-none absolute top-1/2 left-1/2 z-10 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center">
+          <span className="size-1.5 rounded-full bg-fg/80" />
           {aimed ? (
             <p className="mt-2 max-w-56 truncate text-center text-xs text-fg/90">{aimed.caption || aimed.name}</p>
           ) : null}
@@ -604,21 +570,7 @@ export function ExplorerApp() {
       ) : null}
 
       {state.surface === "space" ? (
-        <div className="absolute inset-x-0 bottom-16 z-20 px-3">
-          <div className="pointer-events-none mb-1 hidden items-center justify-between text-[11px] text-muted md:flex">
-            <span>
-              {state.mode === "maze"
-                ? "WASD walk · lamp follows your look · Q R turn · E inspect · F star"
-                : walking
-                  ? "WASD walk · drag or double-click to look · Q R turn · E inspect · F star"
-                  : "WASD fly · drag or double-click to look · Space up · C down · E inspect · F star"}
-            </span>
-            <span>
-              {visible.length} showing
-              {state.loadedTextures ? ` · ${state.loadedTextures} sharp` : ""}
-              {state.omitted ? ` · ${state.omitted} outside the maze` : ""}
-            </span>
-          </div>
+        <div className="absolute inset-x-0 bottom-4 z-20 px-3">
           {visible.length ? (
             <>
               <div className="mb-2 flex items-center gap-2">
@@ -631,7 +583,7 @@ export function ExplorerApp() {
                   min={0}
                   max={Math.max(visible.length - 1, 0)}
                   value={Math.min(cursor, Math.max(visible.length - 1, 0))}
-                  aria-label="Scrub by date"
+                  aria-label="Choose a picture"
                   onChange={(event) => {
                     const photo = visible[Number(event.target.value)];
                     if (photo) state.requestFocus(photo.id);
@@ -673,30 +625,25 @@ export function ExplorerApp() {
         </div>
       ) : null}
 
-      <div className={`${selected || state.drawerOpen || state.helpOpen ? "hidden" : "absolute bottom-[15.5rem] left-3 z-20 grid grid-cols-3 gap-1 md:hidden"}`}>
-        <Hold code="KeyQ" label="Q" />
+      <div className={`${selected || state.drawerOpen ? "hidden" : "absolute bottom-44 left-3 z-20 grid grid-cols-3 gap-1 md:hidden"}`}>
+        <span />
         <Hold code="KeyW" label="W" />
-        <Hold code="KeyR" label="R" />
+        <span />
         <Hold code="KeyA" label="A" />
         <Hold code="KeyS" label="S" />
         <Hold code="KeyD" label="D" />
-        <Hold code="KeyC" label="C" />
-        <Hold code="Space" label="Up" />
-        <button type="button" className={pad} onClick={() => state.patch({ helpOpen: true })}>
-          ?
-        </button>
       </div>
 
       {state.drawerOpen ? (
         <aside className="absolute top-0 left-0 z-40 flex h-full w-[min(100%,22rem)] flex-col gap-4 overflow-y-auto border-r border-line bg-surface/95 p-4 pt-6 backdrop-blur-md">
           <div className="flex items-center justify-between">
-            <h2 className="font-display text-2xl">Library</h2>
-            <button type="button" className={btn} onClick={() => state.patch({ drawerOpen: false })} aria-label="Close library">
+            <h2 className="font-display text-2xl">Pictures</h2>
+            <button type="button" className={btn} onClick={() => state.patch({ drawerOpen: false })} aria-label="Close pictures">
               <X className="size-4" />
             </button>
           </div>
           <p className="text-sm text-muted">
-            {visible.length} of {state.photos.length || 0} photos
+            {visible.length} of {state.photos.length || 0} pictures
             {state.runtime === "local" && state.localFolder ? ` · ${state.localFolder}` : ""}
           </p>
           {state.runtime === "local" ? (
@@ -718,7 +665,7 @@ export function ExplorerApp() {
             <input
               className={`${field} pl-9`}
               value={state.query}
-              placeholder="Search name, place, tag, note"
+              placeholder="Search"
               onChange={(event) => state.patch({ query: event.target.value })}
             />
           </label>
@@ -749,13 +696,28 @@ export function ExplorerApp() {
             <input type="checkbox" className="size-4" checked={state.showHidden} onChange={(event) => state.patch({ showHidden: event.target.checked })} />
             Show hidden
           </label>
-          <label className="flex flex-col gap-1 text-xs text-muted">
-            Gallery rooms grouped by
-            <select className={field} value={state.groupBy} onChange={(event) => state.patch({ groupBy: event.target.value as typeof state.groupBy })}>
-              <option value="date">Date</option>
-              <option value="folder">Folder</option>
-            </select>
-          </label>
+          <div className="flex flex-wrap gap-1.5">
+            <button
+              type="button"
+              className={`${chip} ${state.mode === "gallery" && state.surface === "space" ? onBtn : ""}`}
+              onClick={() => {
+                state.setMode("gallery");
+                state.patch({ drawerOpen: false });
+              }}
+            >
+              Rooms
+            </button>
+            <button
+              type="button"
+              className={`${chip} ${state.mode === "grid" && state.surface === "space" ? onBtn : ""}`}
+              onClick={() => {
+                state.setMode("grid");
+                state.patch({ drawerOpen: false });
+              }}
+            >
+              By date
+            </button>
+          </div>
           {tags.length ? (
             <div className="flex flex-wrap gap-1.5">
               {tags.map((tag) => (
@@ -785,40 +747,67 @@ export function ExplorerApp() {
               ))}
             </div>
           ) : null}
-          <label className="flex flex-col gap-1 text-xs text-muted">
-            Fog {state.fog.toFixed(3)}
-            <input type="range" min={0} max={0.05} step={0.001} value={state.fog} onChange={(event) => state.patch({ fog: Number(event.target.value) })} />
-          </label>
-          <label className="flex flex-col gap-1 text-xs text-muted">
-            Speed {state.speed.toFixed(2)}
-            <input type="range" min={0.4} max={2.2} step={0.05} value={state.speed} onChange={(event) => state.patch({ speed: Number(event.target.value) })} />
-          </label>
-          <label className="flex flex-col gap-1 text-xs text-muted">
-            Grid columns {state.cols}
-            <input type="range" min={2} max={10} step={1} value={state.cols} onChange={(event) => state.patch({ cols: Number(event.target.value) })} />
-          </label>
-          <label className="flex flex-col gap-1 text-xs text-muted">
-            Photo size {state.size.toFixed(2)}
-            <input type="range" min={0.9} max={2.8} step={0.05} value={state.size} onChange={(event) => state.patch({ size: Number(event.target.value) })} />
-          </label>
-          <div className="flex gap-2">
-            <button type="button" className={`${btn} ${state.quality === "fast" ? onBtn : ""}`} onClick={() => state.patch({ quality: "fast" })}>
-              Fast textures
-            </button>
-            <button type="button" className={`${btn} ${state.quality === "sharp" ? onBtn : ""}`} onClick={() => state.patch({ quality: "sharp" })}>
-              Sharp
-            </button>
-          </div>
-          <label className="flex min-h-11 items-center gap-2 text-sm">
-            <input type="checkbox" className="size-4" checked={state.autoGlide} onChange={(event) => state.patch({ autoGlide: event.target.checked })} />
-            Auto-glide in fly modes
-          </label>
+          <details className="rounded-md border border-line px-3 py-2">
+            <summary className="cursor-pointer py-2 text-sm">More options</summary>
+            <div className="flex flex-col gap-4 pt-2">
+              <div className="flex flex-wrap gap-1.5">
+                {EXTRA_MODES.map((mode) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className={`${chip} ${state.mode === mode && state.surface === "space" ? onBtn : ""}`}
+                    onClick={() => {
+                      state.setMode(mode);
+                      state.patch({ drawerOpen: false });
+                    }}
+                  >
+                    {MODE_LABEL[mode]}
+                  </button>
+                ))}
+              </div>
+              <label className="flex flex-col gap-1 text-xs text-muted">
+                Group rooms by
+                <select className={field} value={state.groupBy} onChange={(event) => state.patch({ groupBy: event.target.value as typeof state.groupBy })}>
+                  <option value="date">Date</option>
+                  <option value="folder">Folder</option>
+                </select>
+              </label>
+              <label className="flex flex-col gap-1 text-xs text-muted">
+                Fog {state.fog.toFixed(3)}
+                <input type="range" min={0} max={0.05} step={0.001} value={state.fog} onChange={(event) => state.patch({ fog: Number(event.target.value) })} />
+              </label>
+              <label className="flex flex-col gap-1 text-xs text-muted">
+                Speed {state.speed.toFixed(2)}
+                <input type="range" min={0.4} max={2.2} step={0.05} value={state.speed} onChange={(event) => state.patch({ speed: Number(event.target.value) })} />
+              </label>
+              <label className="flex flex-col gap-1 text-xs text-muted">
+                Columns {state.cols}
+                <input type="range" min={2} max={10} step={1} value={state.cols} onChange={(event) => state.patch({ cols: Number(event.target.value) })} />
+              </label>
+              <label className="flex flex-col gap-1 text-xs text-muted">
+                Picture size {state.size.toFixed(2)}
+                <input type="range" min={0.9} max={2.8} step={0.05} value={state.size} onChange={(event) => state.patch({ size: Number(event.target.value) })} />
+              </label>
+              <div className="flex gap-2">
+                <button type="button" className={`${btn} ${state.quality === "fast" ? onBtn : ""}`} onClick={() => state.patch({ quality: "fast" })}>
+                  Faster
+                </button>
+                <button type="button" className={`${btn} ${state.quality === "sharp" ? onBtn : ""}`} onClick={() => state.patch({ quality: "sharp" })}>
+                  Sharper
+                </button>
+              </div>
+              <label className="flex min-h-11 items-center gap-2 text-sm">
+                <input type="checkbox" className="size-4" checked={state.autoGlide} onChange={(event) => state.patch({ autoGlide: event.target.checked })} />
+                Drift forward on your own
+              </label>
+            </div>
+          </details>
           <div className="mt-2 flex flex-col gap-2 border-t border-line pt-4">
             <button type="button" className={btn} onClick={exportMarks}>
-              <Download className="size-4" /> Export marks
+              <Download className="size-4" /> Export notes
             </button>
             <button type="button" className={btn} onClick={() => importInput.current?.click()}>
-              <Upload className="size-4" /> Import marks
+              <Upload className="size-4" /> Import notes
             </button>
             <button
               type="button"
@@ -834,12 +823,7 @@ export function ExplorerApp() {
               Save into folder
             </button>
             <p className="text-xs leading-relaxed text-muted">
-              Marks are kept in this browser. Saving into a folder writes a sidecar, never the original files.
-              {state.runtime === "local"
-                ? " This copy reads pictures straight from the folder."
-                : state.writable
-                  ? ""
-                  : " Drag, drop, and the basic picker cannot write back."}
+              Stars and notes stay in this browser. Save into folder writes a small notes file beside the pictures. The pictures themselves are not changed.
             </p>
           </div>
         </aside>
@@ -858,11 +842,9 @@ export function ExplorerApp() {
         />
       ) : null}
 
-      {state.helpOpen ? <Help onClose={() => state.patch({ helpOpen: false })} /> : null}
-
       {state.booting && state.photos.length === 0 ? (
         <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center px-6">
-          <p className="rounded-md border border-line bg-surface/95 px-4 py-3 font-display text-lg">Opening the demo library</p>
+          <p className="rounded-md border border-line bg-surface/95 px-4 py-3 font-display text-lg">Opening pictures</p>
         </div>
       ) : null}
       {state.busy && !state.booting ? (
@@ -1063,59 +1045,6 @@ function Inspector({
         ))}
       </div>
     </aside>
-  );
-}
-
-function Help({ onClose }: { onClose: () => void }) {
-  return (
-    <div className="absolute inset-0 z-[60] flex items-end justify-center bg-bg/70 p-3 md:items-center" role="dialog" aria-label="How to use Drift Hall">
-      <div className="max-h-[80%] w-full max-w-lg overflow-y-auto rounded-md border border-line bg-surface p-5">
-        <div className="mb-3 flex items-start justify-between gap-3">
-          <h2 className="font-display text-3xl tracking-tight">How to walk the hall</h2>
-          <button type="button" className={btn} onClick={onClose} aria-label="Close help">
-            <X className="size-4" />
-          </button>
-        </div>
-        <div className="space-y-3 text-sm leading-relaxed text-fg/90">
-          <p>
-            Open a folder from your computer. Photos stay where they are — nothing is uploaded. On the desktop starter,
-            the hall reads that folder straight from disk and remembers it next time. Dates come from the camera when
-            they exist, otherwise from the file date, and they fill in while you are already walking.
-          </p>
-          <p>
-            The rooms drift a little, like a dream: lilac and teal light, slow rings, a breath of fog. The pictures
-            themselves stay as they were shot.
-          </p>
-          <p>
-            <strong className="font-medium text-brass">Date grid</strong> lines pictures up by month.{" "}
-            <strong className="font-medium text-brass">Gallery</strong> hangs them in rooms you can walk, grouped by
-            year or by folder. <strong className="font-medium text-brass">Float</strong>,{" "}
-            <strong className="font-medium text-brass">Tunnel</strong>, and{" "}
-            <strong className="font-medium text-brass">Spiral</strong> are fly-throughs.{" "}
-            <strong className="font-medium text-brass">Maze</strong> puts frames on the walls of a generated plan.
-          </p>
-          <p>
-            WASD or arrows move. A strafes left, D right. Drag to look, or double-click to capture the mouse. Q and R
-            turn. Shift sprints. In fly modes, Space rises and C or Ctrl drops. Gallery and maze keep you at eye height.
-          </p>
-          <p>
-            Keys 1–6 switch modes. E flies to the picture under the crosshair. F stars it. [ and ] step through the
-            filter. I opens the contact sheet. H is this panel.
-          </p>
-          <p>
-            Stars, tags, notes, albums, and hiding are saved in this browser. If you open the folder with editing
-            allowed, “Save into folder” writes <span className="text-brass">DriftHall/marks.json</span> beside the
-            files. Originals are never rewritten. Drag-and-drop and the classic picker cannot write that file.
-          </p>
-          <p className="text-muted">
-            HEIC is skipped. Up to 2,000 images load at once; lower the fog if a long grid disappears into the distance.
-            The sample library uses Unsplash photos served as ordinary JPEGs so you can try every room before pointing
-            at your own folder. The fly-throughs and walkable rooms take their cue from floating galleries and museum
-            viewers — this one is built for a folder you already have.
-          </p>
-        </div>
-      </div>
-    </div>
   );
 }
 

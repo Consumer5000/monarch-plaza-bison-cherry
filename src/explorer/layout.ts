@@ -130,15 +130,8 @@ function roomSlots(centerZ: number, withSouth: boolean): Slot[] {
         { position: [3.65, 1.62, southZ - inset], normal: [0, 0, -1] },
       ]
     : [];
-  const order: Slot[] = [];
-  const n = Math.max(left.length, right.length, north.length, south.length);
-  for (let i = 0; i < n; i++) {
-    if (left[i]) order.push(left[i]!);
-    if (right[i]) order.push(right[i]!);
-    if (north[i]) order.push(north[i]!);
-    if (south[i]) order.push(south[i]!);
-  }
-  return order;
+  // One wall at a time, entrance to the far end, so pictures follow the walk.
+  return [...left, ...right, ...north, ...south];
 }
 
 function addRoomShell(blocks: Block[], centerZ: number, withSouth: boolean) {
