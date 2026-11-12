@@ -265,7 +265,8 @@ function thumbWidth(raw) {
   if (n >= 1100) return 1280;
   if (n >= 800) return 960;
   if (n >= 480) return 640;
-  return 320;
+  if (n >= 200) return 320;
+  return 128;
 }
 
 async function loadSharp() {
@@ -283,7 +284,7 @@ let sharpActive = 0;
 const sharpWaiters = [];
 
 function takeSharpSlot() {
-  if (sharpActive < 2) {
+  if (sharpActive < 4) {
     sharpActive += 1;
     return Promise.resolve();
   }
@@ -352,7 +353,7 @@ async function sendThumb(res, rel, width) {
       await sharp(file.abs)
         .rotate()
         .resize({ width, withoutEnlargement: true })
-        .jpeg({ quality: 74 })
+        .jpeg({ quality: width <= 160 ? 58 : 74 })
         .toFile(tmp);
       await rename(tmp, dest);
     } finally {
