@@ -278,7 +278,7 @@ export function mountWorld(canvas: HTMLCanvasElement) {
 
   const composer = new EffectComposer(renderer);
   composer.setPixelRatio(pixelRatio);
-  const bloomPass = new UnrealBloomPass(new Vector2(384, 384), 0.42, 0.72, 0.96);
+  const bloomPass = new UnrealBloomPass(new Vector2(384, 384), 0.18, 0.6, 0.92);
   const gradePass = new ShaderPass({
     uniforms: {
       tDiffuse: { value: null },
@@ -297,18 +297,18 @@ export function mountWorld(canvas: HTMLCanvasElement) {
       varying vec2 vUv;
       void main() {
         vec2 p = vUv - 0.5;
-        float edge = smoothstep(0.15, 0.85, length(p));
-        float fringe = 0.0014 * edge;
+        float edge = smoothstep(0.2, 0.9, length(p));
+        float fringe = 0.0003 * edge;
         vec4 color;
         color.r = texture2D(tDiffuse, vUv + vec2(fringe, 0.0)).r;
         color.g = texture2D(tDiffuse, vUv).g;
         color.b = texture2D(tDiffuse, vUv - vec2(fringe, fringe * 0.4)).b;
         color.a = 1.0;
-        float vignette = smoothstep(0.98, 0.28, length(p));
-        color.rgb *= mix(0.55, 1.0, vignette);
-        color.rgb = mix(color.rgb, color.rgb * vec3(0.86, 0.95, 1.18) + vec3(0.05, 0.0, 0.06), 0.14);
+        float vignette = smoothstep(1.05, 0.45, length(p));
+        color.rgb *= mix(0.86, 1.0, vignette);
+        color.rgb = mix(color.rgb, color.rgb * vec3(0.92, 0.96, 1.06) + vec3(0.02, 0.0, 0.03), 0.05);
         float grain = fract(sin(dot(vUv + fract(time * 0.013), vec2(12.9898, 78.233))) * 43758.5453);
-        color.rgb += (grain - 0.5) * 0.025;
+        color.rgb += (grain - 0.5) * 0.008;
         gl_FragColor = color;
       }
     `,
@@ -320,7 +320,7 @@ export function mountWorld(canvas: HTMLCanvasElement) {
 
   const photoGeo = new PlaneGeometry(1, 1);
   const frameMat = new MeshBasicMaterial({ side: DoubleSide, toneMapped: false });
-  hdr(frameMat, 1.15, 0.85, 1.7);
+  hdr(frameMat, 0.72, 0.64, 0.82);
   const starGeo = new CircleGeometry(0.08, 16);
   const starMat = new MeshBasicMaterial({ side: DoubleSide, toneMapped: false });
   hdr(starMat, 1.55, 1.15, 2.3);
@@ -569,39 +569,6 @@ export function mountWorld(canvas: HTMLCanvasElement) {
         mat.dispose();
       });
     }
-    if (mode === "gallery") {
-      const panelGeo = new PlaneGeometry(2.6, 1.15);
-      const panelMat = new MeshBasicMaterial({ toneMapped: false });
-      hdr(panelMat, 1.1, 1.7, 2.4);
-      const shaftGeo = new CylinderGeometry(0.28, 1.05, 3.15, 14, 1, true);
-      const shaftMat = new MeshBasicMaterial({
-        color: 0xffe6c0,
-        transparent: true,
-        opacity: 0.09,
-        depthWrite: false,
-        side: DoubleSide,
-        blending: AdditiveBlending,
-        toneMapped: false,
-      });
-      for (const block of layout.blocks) {
-        if (block.color !== "floor") continue;
-        const panel = new Mesh(panelGeo, panelMat);
-        panel.position.set(block.position[0], 3.92, block.position[2]);
-        panel.rotation.x = -Math.PI / 2;
-        content.add(panel);
-        pulses.push(panel);
-        const shaft = new Mesh(shaftGeo, shaftMat);
-        shaft.position.set(block.position[0], 2.25, block.position[2]);
-        shaft.raycast = () => undefined;
-        content.add(shaft);
-      }
-      trash.push(() => {
-        panelGeo.dispose();
-        panelMat.dispose();
-        shaftGeo.dispose();
-        shaftMat.dispose();
-      });
-    }
     if (mode === "spiral") {
       let minZ = 0;
       for (const node of layout.nodes) {
@@ -846,7 +813,7 @@ export function mountWorld(canvas: HTMLCanvasElement) {
 
   function integrate(dt: number) {
     const state = useExplorer.getState();
-    if (state.surface !== "space" || state.helpOpen || isTyping()) {
+    if (state.surface !== "space" || isTyping()) {
       speed = 0;
       vel.set(0, 0, 0);
       return;
@@ -865,12 +832,12 @@ export function mountWorld(canvas: HTMLCanvasElement) {
     }
     const fly = !walkMode(state.mode);
     const sprint = held.has("ShiftLeft") || held.has("ShiftRight") ? 1.85 : 1;
-    const mag = (fly ? 5.4 : 3.5) * state.speed * sprint;
+    const mag = (fly ? 3.4 : 2.15) * state.speed * sprint;
     let forward = (held.has("KeyW") || held.has("ArrowUp") ? 1 : 0) - (held.has("KeyS") || held.has("ArrowDown") ? 1 : 0);
     if (fly && state.autoGlide) forward += 1;
     const strafe = (held.has("KeyD") || held.has("ArrowRight") ? 1 : 0) - (held.has("KeyA") || held.has("ArrowLeft") ? 1 : 0);
-    if (held.has("KeyQ")) yaw += 1.7 * dt;
-    if (held.has("KeyR")) yaw -= 1.7 * dt;
+    if (held.has("KeyQ")) yaw += 1.15 * dt;
+    if (held.has("KeyR")) yaw -= 1.15 * dt;
     const cp = Math.cos(pitch);
     const fx = -Math.sin(yaw);
     const fz = -Math.cos(yaw);
@@ -914,10 +881,10 @@ export function mountWorld(canvas: HTMLCanvasElement) {
     const sprinting = held.has("ShiftLeft") || held.has("ShiftRight");
     const moving = speed > 0.45 && !tween;
     const walking = walkMode(state.mode);
-    if (moving) bob += dt * (sprinting ? 13 : walking ? 9.4 : 2.2);
-    bobAmp += (((moving ? 1 : 0) - bobAmp) * Math.min(1, dt * 6));
-    const vertical = Math.sin(bob) * (walking ? 0.048 : 0.03) * bobAmp;
-    const lateral = Math.cos(bob * 0.5) * (walking ? 0.03 : 0.012) * bobAmp;
+    if (moving) bob += dt * (sprinting ? 8 : walking ? 6.2 : 1.6);
+    bobAmp += (((moving ? 1 : 0) - bobAmp) * Math.min(1, dt * 4));
+    const vertical = Math.sin(bob) * (walking ? 0.02 : 0.012) * bobAmp;
+    const lateral = Math.cos(bob * 0.5) * (walking ? 0.012 : 0.006) * bobAmp;
     const rx = Math.cos(yaw);
     const rz = -Math.sin(yaw);
     camera.position.set(pos.x + rx * lateral, pos.y + vertical, pos.z + rz * lateral);
@@ -928,8 +895,7 @@ export function mountWorld(canvas: HTMLCanvasElement) {
       camera.position.z - Math.cos(yaw) * cp,
     );
     camera.lookAt(look);
-    camera.rotateZ(Math.sin(elapsed * 0.17) * 0.012);
-    const targetFov = sprinting && speed > 1 && !tween ? 76 : 68;
+    const targetFov = sprinting && speed > 1 && !tween ? 72 : 68;
     if (Math.abs(camera.fov - targetFov) > 0.04) {
       camera.fov += (targetFov - camera.fov) * Math.min(1, dt * 4.5);
       camera.updateProjectionMatrix();
@@ -938,19 +904,21 @@ export function mountWorld(canvas: HTMLCanvasElement) {
     const mode = state.mode;
     const maze = mode === "maze";
     const gallery = mode === "gallery";
-    hemi.intensity = maze ? 0.22 : gallery ? 0.7 : 1.55;
-    keyLight.intensity = maze ? 0.35 : gallery ? 1.5 : 3.1;
-    flash.intensity = maze ? 28 + Math.sin(elapsed * 18) * 1.2 : gallery ? 6 : mode === "grid" ? 1.4 : 0;
+    hemi.intensity = maze ? 0.55 : gallery ? 1.05 : 1.15;
+    keyLight.intensity = maze ? 0.5 : gallery ? 0.95 : 1.35;
+    flash.intensity = maze ? 6 : gallery ? 0.8 : 0;
     flash.angle = maze ? 0.46 : 0.72;
     flash.distance = maze ? 18 : 30;
-    beam.visible = maze || gallery;
-    beamMat.opacity = maze ? 0.075 : 0.04;
-    starField.visible = mode === "float" || mode === "tunnel" || mode === "spiral";
+    beam.visible = maze;
+    beamMat.opacity = maze ? 0.03 : 0.012;
+    const dreamy = mode === "float" || mode === "tunnel" || mode === "spiral";
+    starField.visible = dreamy;
+    dreamAnchor.visible = dreamy;
     starField.position.copy(pos);
     starField.rotation.y = elapsed * 0.015;
     keyLight.position.set(pos.x + 6, pos.y + 12, pos.z + 5);
     keyLight.target.position.set(pos.x, 0.2, pos.z - 2);
-    bloomPass.strength = maze ? 0.72 : mode === "tunnel" ? 0.85 : gallery ? 0.58 : mode === "float" ? 0.5 : 0.4;
+    bloomPass.strength = maze ? 0.22 : mode === "tunnel" ? 0.24 : gallery ? 0.16 : mode === "float" ? 0.16 : 0.14;
   }
 
   function updateDust(elapsed: number) {
@@ -960,9 +928,9 @@ export function mountWorld(canvas: HTMLCanvasElement) {
       const ox = dustOrigin[i * 3]!;
       const oy = dustOrigin[i * 3 + 1]!;
       const oz = dustOrigin[i * 3 + 2]!;
-      array[i * 3] = pos.x + ox + Math.sin(elapsed * 0.17 + i) * 0.35;
-      array[i * 3 + 1] = pos.y + oy + Math.sin(elapsed * 0.31 + ox) * 0.18;
-      array[i * 3 + 2] = pos.z + oz + Math.cos(elapsed * 0.13 + i) * 0.35;
+      array[i * 3] = pos.x + ox + Math.sin(elapsed * 0.08 + i) * 0.12;
+      array[i * 3 + 1] = pos.y + oy + Math.sin(elapsed * 0.12 + ox) * 0.06;
+      array[i * 3 + 2] = pos.z + oz + Math.cos(elapsed * 0.07 + i) * 0.12;
     }
     attr.needsUpdate = true;
   }
@@ -972,18 +940,16 @@ export function mountWorld(canvas: HTMLCanvasElement) {
       if (!rec.face) continue;
       rec.mesh.quaternion.copy(camera.quaternion);
       rec.mesh.position.copy(rec.base);
-      rec.mesh.position.y += Math.sin(elapsed * 0.9 + rec.phase) * 0.12;
+      rec.mesh.position.y += Math.sin(elapsed * 0.35 + rec.phase) * 0.03;
     }
-    const glow = 0.82 + Math.sin(elapsed * 1.6) * 0.18;
-    const tide = 0.5 + Math.sin(elapsed * 0.7) * 0.5;
+    const glow = 0.94 + Math.sin(elapsed * 0.4) * 0.04;
+    const tide = 0.5 + Math.sin(elapsed * 0.22) * 0.12;
     for (const mesh of pulses) {
       const mat = mesh.material as MeshBasicMaterial;
       mat.color.r = (0.55 + 0.9 * (1 - tide)) * glow;
       mat.color.g = (0.85 + 0.7 * tide) * glow;
       mat.color.b = (1.15 + 0.9 * tide) * glow;
     }
-    frameMat.color.setHSL(0.74 + Math.sin(elapsed * 0.35) * 0.14, 0.62, 0.56);
-    frameMat.color.multiplyScalar(1.55);
   }
 
   function resize() {
@@ -1012,7 +978,7 @@ export function mountWorld(canvas: HTMLCanvasElement) {
     else if (event.code === "Digit4") state.setMode("tunnel");
     else if (event.code === "Digit5") state.setMode("spiral");
     else if (event.code === "Digit6") state.setMode("maze");
-    else if (event.code === "KeyH") state.patch({ helpOpen: !state.helpOpen });
+    else if (event.code === "KeyH") state.patch({ hintOpen: !state.hintOpen });
     else if (event.code === "KeyI") state.setSurface(state.surface === "index" ? "space" : "index");
     else if (event.code === "KeyE") {
       const id = state.aimId ?? state.selectedId;
@@ -1030,7 +996,14 @@ export function mountWorld(canvas: HTMLCanvasElement) {
       state.requestFocus(vis[index]!.id);
     } else if (event.code === "Escape") {
       if (document.pointerLockElement) document.exitPointerLock();
-      if (state.helpOpen) state.patch({ helpOpen: false });
+      if (state.hintOpen) {
+        state.patch({ hintOpen: false });
+        try {
+          localStorage.setItem("drift-hall-hint", "1");
+        } catch {
+          /* private mode */
+        }
+      } else if (state.helpOpen) state.patch({ helpOpen: false });
       else if (state.drawerOpen) state.patch({ drawerOpen: false });
       else if (state.selectedId) state.patch({ selectedId: null });
       else if (state.surface === "index") state.setSurface("space");
@@ -1141,14 +1114,14 @@ export function mountWorld(canvas: HTMLCanvasElement) {
     applyCamera(dt, elapsed);
     billboard(elapsed);
     updateDust(elapsed);
-    fog.density = fogBase * (1 + Math.sin(elapsed * 0.37) * 0.1);
-    const follow = Math.min(1, dt * 0.45);
+    fog.density = fogBase;
+    const follow = Math.min(1, dt * 0.2);
     dreamAnchor.position.x += (pos.x - dreamAnchor.position.x) * follow;
     dreamAnchor.position.z += (pos.z - dreamAnchor.position.z) * follow;
-    dreamAnchor.position.y = 1.35 + Math.sin(elapsed * 0.23) * 0.28;
+    dreamAnchor.position.y = 1.4 + Math.sin(elapsed * 0.12) * 0.06;
     for (const piece of dreamPieces) {
-      piece.mesh.rotation.y += dt * piece.spin;
-      piece.mesh.rotation.x += dt * piece.spin * 0.28;
+      piece.mesh.rotation.y += dt * piece.spin * 0.28;
+      piece.mesh.rotation.x += dt * piece.spin * 0.08;
     }
     gradePass.uniforms.time!.value = elapsed;
     const heading = headingOf(yaw);
