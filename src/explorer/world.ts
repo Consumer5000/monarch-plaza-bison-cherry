@@ -752,11 +752,23 @@ export function mountWorld(canvas: HTMLCanvasElement) {
       const blob = await response.blob();
       if (generation !== token || dead) return;
       const maxW = texQuality === "sharp" ? 1280 : 640;
+      // ImageBitmap uploads ignore Texture.flipY, so a normal bitmap lands
+      // upside down on the plane. "flipY" applies the camera's EXIF orientation
+      // first, then stores the pixels the way WebGL samples them. Left and
+      // right stay put.
       let bitmap: ImageBitmap;
       try {
-        bitmap = await createImageBitmap(blob, { resizeWidth: maxW, resizeQuality: "low" });
+        bitmap = await createImageBitmap(blob, {
+          resizeWidth: maxW,
+          resizeQuality: "low",
+          imageOrientation: "flipY",
+        });
       } catch {
-        bitmap = await createImageBitmap(blob);
+        try {
+          bitmap = await createImageBitmap(blob, { imageOrientation: "flipY" });
+        } catch {
+          bitmap = await createImageBitmap(blob);
+        }
       }
       if (generation !== token || dead) {
         bitmap.close();
@@ -764,6 +776,7 @@ export function mountWorld(canvas: HTMLCanvasElement) {
       }
       const aspect = bitmap.width / Math.max(1, bitmap.height);
       const tex = new Texture(bitmap);
+      tex.flipY = false;
       tex.needsUpdate = true;
       tex.colorSpace = SRGBColorSpace;
       tex.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy());
