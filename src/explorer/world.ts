@@ -20,7 +20,7 @@ import {
   MeshPhongMaterial,
   NoToneMapping,
   Object3D,
-  PCFSoftShadowMap,
+  PCFShadowMap,
   PerspectiveCamera,
   PlaneGeometry,
   Points,
@@ -49,7 +49,10 @@ import { visiblePhotos } from "./query";
 import { useExplorer } from "./store";
 import type { Block, BlockColor, Layout, Mode, Photo, PhotoNode, Vec3 } from "./types";
 
-const BLOCK_COLOR = { wall: 0x2a2144, floor: 0x140e22, ceiling: 0x221838, path: 0x5ee0d0 } as const;
+const BLOCK_NATURAL = { wall: 0x3c3834, floor: 0x2c2824, ceiling: 0x45403b, path: 0xb7aa96 } as const;
+const BLOCK_DREAM = { wall: 0x2a2144, floor: 0x140e22, ceiling: 0x221838, path: 0x5ee0d0 } as const;
+const BG_NATURAL = new Color(0x161410);
+const BG_DREAM = new Color(0x12081c);
 const RADIUS = 0.32;
 const MOVE = new Set([
   "KeyW",
@@ -135,13 +138,13 @@ export function mountWorld(canvas: HTMLCanvasElement) {
   renderer.setPixelRatio(pixelRatio);
   renderer.outputColorSpace = SRGBColorSpace;
   renderer.toneMapping = NoToneMapping;
-  renderer.setClearColor(0x12081c, 1);
+  renderer.setClearColor(BG_NATURAL, 1);
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = PCFSoftShadowMap;
+  renderer.shadowMap.type = PCFShadowMap;
 
   const scene = new Scene();
-  scene.background = new Color(0x12081c);
-  const fog = new FogExp2(0x2a1840, useExplorer.getState().fog);
+  scene.background = BG_NATURAL;
+  const fog = new FogExp2(BG_NATURAL, useExplorer.getState().fog);
   scene.fog = fog;
   const camera = new PerspectiveCamera(68, 1, 0.08, 2500);
   scene.add(camera);
@@ -150,9 +153,9 @@ export function mountWorld(canvas: HTMLCanvasElement) {
   const timer = new Timer();
   timer.connect(document);
 
-  const hemi = new HemisphereLight(0xcbb6ff, 0x123c3c, 1.45);
+  const hemi = new HemisphereLight(0xfff6ea, 0x4a4036, 0.95);
   scene.add(hemi);
-  const keyLight = new DirectionalLight(0x7ef0e2, 2.15);
+  const keyLight = new DirectionalLight(0xfff8f0, 1.25);
   keyLight.position.set(7, 14, 5);
   keyLight.castShadow = true;
   keyLight.shadow.mapSize.set(1024, 1024);
@@ -167,7 +170,7 @@ export function mountWorld(canvas: HTMLCanvasElement) {
   scene.add(keyLight);
   scene.add(keyLight.target);
 
-  const flash = new SpotLight(0xd7c6ff, 0, 26, 0.5, 0.58, 1);
+  const flash = new SpotLight(0xfff4e5, 0, 26, 0.5, 0.58, 1);
   flash.position.set(0, -0.05, 0.15);
   flash.target.position.set(0, -0.15, -1);
   camera.add(flash);
@@ -420,7 +423,7 @@ export function mountWorld(canvas: HTMLCanvasElement) {
     const ctx = board.getContext("2d");
     if (!ctx) return;
     ctx.font = "600 78px Fraunces, Georgia, serif";
-    ctx.fillStyle = "#e7d4ff";
+    ctx.fillStyle = useExplorer.getState().stylized ? "#e7d4ff" : "#f4efe6";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(text, 384, 80);
@@ -491,24 +494,27 @@ export function mountWorld(canvas: HTMLCanvasElement) {
   }
 
   function blockMaterial(color: BlockColor) {
+    const stylized = useExplorer.getState().stylized;
+    const palette = stylized ? BLOCK_DREAM : BLOCK_NATURAL;
     if (color === "path") {
       const mat = new MeshBasicMaterial({ toneMapped: false });
-      hdr(mat, 0.18, 0.62, 0.55);
+      if (stylized) hdr(mat, 0.18, 0.62, 0.55);
+      else mat.color.setHex(palette.path);
       return mat;
     }
     if (color === "floor") {
       return new MeshPhongMaterial({
-        color: BLOCK_COLOR.floor,
-        emissive: 0x12171d,
-        emissiveIntensity: 0.55,
-        shininess: 48,
-        specular: 0xb29678,
+        color: palette.floor,
+        emissive: stylized ? 0x12171d : 0x1c1916,
+        emissiveIntensity: stylized ? 0.55 : 0.18,
+        shininess: 28,
+        specular: stylized ? 0xb29678 : 0x6e655c,
       });
     }
     return new MeshLambertMaterial({
-      color: BLOCK_COLOR[color],
-      emissive: BLOCK_COLOR[color],
-      emissiveIntensity: color === "ceiling" ? 0.42 : 0.24,
+      color: palette[color],
+      emissive: palette[color],
+      emissiveIntensity: stylized ? (color === "ceiling" ? 0.42 : 0.24) : 0.08,
     });
   }
 
@@ -551,7 +557,8 @@ export function mountWorld(canvas: HTMLCanvasElement) {
     if (mode === "tunnel") {
       const geo = new TorusGeometry(5.15, 0.035, 10, 64);
       const mat = new MeshBasicMaterial({ toneMapped: false });
-      hdr(mat, 0.7, 1.45, 1.7);
+      if (useExplorer.getState().stylized) hdr(mat, 0.7, 1.45, 1.7);
+      else mat.color.setHex(0xc8bba8);
       const zs = new Set<number>();
       for (const node of layout.nodes) {
         if (node.kind === "photo") zs.add(Math.round(node.position[2] * 10) / 10);
@@ -577,7 +584,8 @@ export function mountWorld(canvas: HTMLCanvasElement) {
       const height = Math.max(4, Math.abs(minZ) + 2);
       const geo = new CylinderGeometry(0.035, 0.035, height, 8);
       const mat = new MeshBasicMaterial({ toneMapped: false });
-      hdr(mat, 1.2, 0.7, 1.8);
+      if (useExplorer.getState().stylized) hdr(mat, 1.2, 0.7, 1.8);
+      else mat.color.setHex(0xc8bba8);
       const spine = new Mesh(geo, mat);
       spine.rotation.x = Math.PI / 2;
       spine.position.set(0, 1.62, minZ / 2);
@@ -663,6 +671,7 @@ export function mountWorld(canvas: HTMLCanvasElement) {
       state.album ?? "",
       state.from,
       state.to,
+      state.stylized ? 1 : 0,
       vis.map((photo) => photo.id).join("\n"),
     ].join("|");
     if (sig !== layoutKey) {
@@ -813,7 +822,7 @@ export function mountWorld(canvas: HTMLCanvasElement) {
 
   function integrate(dt: number) {
     const state = useExplorer.getState();
-    if (state.surface !== "space" || isTyping()) {
+    if (state.surface !== "space" || state.settingsOpen || isTyping()) {
       speed = 0;
       vel.set(0, 0, 0);
       return;
@@ -904,21 +913,48 @@ export function mountWorld(canvas: HTMLCanvasElement) {
     const mode = state.mode;
     const maze = mode === "maze";
     const gallery = mode === "gallery";
-    hemi.intensity = maze ? 0.55 : gallery ? 1.05 : 1.15;
-    keyLight.intensity = maze ? 0.5 : gallery ? 0.95 : 1.35;
-    flash.intensity = maze ? 6 : gallery ? 0.8 : 0;
+    const stylized = state.stylized;
+    hemi.intensity = maze ? 0.7 : 0.95;
+    keyLight.intensity = maze ? 0.55 : gallery ? 1.25 : 1.15;
+    flash.intensity = maze ? 7 : 0;
     flash.angle = maze ? 0.46 : 0.72;
     flash.distance = maze ? 18 : 30;
-    beam.visible = maze;
-    beamMat.opacity = maze ? 0.03 : 0.012;
+    beam.visible = maze && stylized;
+    beamMat.opacity = 0.03;
     const dreamy = mode === "float" || mode === "tunnel" || mode === "spiral";
-    starField.visible = dreamy;
-    dreamAnchor.visible = dreamy;
+    starField.visible = stylized && dreamy;
+    dreamAnchor.visible = stylized && dreamy;
+    dust.visible = stylized;
     starField.position.copy(pos);
     starField.rotation.y = elapsed * 0.015;
     keyLight.position.set(pos.x + 6, pos.y + 12, pos.z + 5);
     keyLight.target.position.set(pos.x, 0.2, pos.z - 2);
-    bloomPass.strength = maze ? 0.22 : mode === "tunnel" ? 0.24 : gallery ? 0.16 : mode === "float" ? 0.16 : 0.14;
+    applyLook(state.glow, stylized);
+  }
+
+  function applyLook(glow: boolean, stylized: boolean) {
+    const background = stylized ? BG_DREAM : BG_NATURAL;
+    scene.background = background;
+    fog.color.copy(background);
+    renderer.setClearColor(background, 1);
+    if (stylized) {
+      hemi.color.setHex(0xcbb6ff);
+      hemi.groundColor.setHex(0x123c3c);
+      keyLight.color.setHex(0x7ef0e2);
+      flash.color.setHex(0xd7c6ff);
+      hdr(frameMat, 0.72, 0.64, 0.82);
+      hdr(starMat, 1.2, 0.9, 1.6);
+    } else {
+      hemi.color.setHex(0xfff6ea);
+      hemi.groundColor.setHex(0x4a4036);
+      keyLight.color.setHex(0xfff8f0);
+      flash.color.setHex(0xfff4e5);
+      frameMat.color.setHex(0xcfc6b8);
+      starMat.color.setHex(0xc6a15a);
+    }
+    bloomPass.enabled = glow;
+    bloomPass.strength = glow ? (stylized ? 0.32 : 0.14) : 0;
+    gradePass.enabled = stylized;
   }
 
   function updateDust(elapsed: number) {
@@ -942,6 +978,7 @@ export function mountWorld(canvas: HTMLCanvasElement) {
       rec.mesh.position.copy(rec.base);
       rec.mesh.position.y += Math.sin(elapsed * 0.35 + rec.phase) * 0.03;
     }
+    if (!useExplorer.getState().stylized) return;
     const glow = 0.94 + Math.sin(elapsed * 0.4) * 0.04;
     const tide = 0.5 + Math.sin(elapsed * 0.22) * 0.12;
     for (const mesh of pulses) {
@@ -963,6 +1000,18 @@ export function mountWorld(canvas: HTMLCanvasElement) {
   }
 
   function onKeyDown(event: KeyboardEvent) {
+    if (event.code === "Escape" && !event.repeat) {
+      if (document.pointerLockElement) {
+        document.exitPointerLock();
+        return;
+      }
+      const state = useExplorer.getState();
+      if (state.settingsOpen) state.patch({ settingsOpen: false });
+      else if (state.selectedId) state.patch({ selectedId: null });
+      else if (state.drawerOpen) state.patch({ drawerOpen: false });
+      else state.patch({ settingsOpen: true, hintOpen: false });
+      return;
+    }
     if (isTyping()) return;
     if (MOVE.has(event.code)) {
       event.preventDefault();
@@ -994,19 +1043,6 @@ export function mountWorld(canvas: HTMLCanvasElement) {
       if (index < 0) index = 0;
       else index = (index + (event.code === "BracketRight" ? 1 : -1) + vis.length) % vis.length;
       state.requestFocus(vis[index]!.id);
-    } else if (event.code === "Escape") {
-      if (document.pointerLockElement) document.exitPointerLock();
-      if (state.hintOpen) {
-        state.patch({ hintOpen: false });
-        try {
-          localStorage.setItem("drift-hall-hint", "1");
-        } catch {
-          /* private mode */
-        }
-      } else if (state.helpOpen) state.patch({ helpOpen: false });
-      else if (state.drawerOpen) state.patch({ drawerOpen: false });
-      else if (state.selectedId) state.patch({ selectedId: null });
-      else if (state.surface === "index") state.setSurface("space");
     }
   }
 
@@ -1029,11 +1065,17 @@ export function mountWorld(canvas: HTMLCanvasElement) {
     pitch = clamp(pitch - event.movementY * 0.005, -1.15, 1.15);
     tween = null;
   }
-  function onPointerUp() {
+  function onPointerUp(event: PointerEvent) {
     if (!dragging) return;
     dragging = false;
     if (moved < 6) {
+      const rect = canvas.getBoundingClientRect();
+      const savedX = pointer.x;
+      const savedY = pointer.y;
+      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
       const id = hitId();
+      pointer.set(savedX, savedY);
       useExplorer.getState().patch({ aimId: id, selectedId: id });
     }
   }
@@ -1084,7 +1126,8 @@ export function mountWorld(canvas: HTMLCanvasElement) {
       state.from !== prev.from ||
       state.to !== prev.to ||
       state.quality !== prev.quality ||
-      state.fog !== prev.fog
+      state.fog !== prev.fog ||
+      state.stylized !== prev.stylized
     ) {
       syncScene();
     }
@@ -1124,6 +1167,7 @@ export function mountWorld(canvas: HTMLCanvasElement) {
       piece.mesh.rotation.x += dt * piece.spin * 0.08;
     }
     gradePass.uniforms.time!.value = elapsed;
+    const lookState = useExplorer.getState();
     const heading = headingOf(yaw);
     if (heading !== useExplorer.getState().heading) useExplorer.getState().patch({ heading });
     aimWait += dt;
@@ -1137,7 +1181,8 @@ export function mountWorld(canvas: HTMLCanvasElement) {
       pumpWait = 0;
       pump();
     }
-    composer.render();
+    if (lookState.glow || lookState.stylized) composer.render();
+    else renderer.render(scene, camera);
   });
 
   return {
